@@ -5,6 +5,7 @@ import random
 import asyncio
 import json
 import os
+import sys
 from datetime import datetime
 from collections import Counter
 
@@ -171,4 +172,13 @@ async def cancel(interaction: discord.Interaction):
 token = os.getenv("DISCORD_TOKEN")
 if not token:
     raise RuntimeError("Environment variable DISCORD_TOKEN is not set.")
+# 日本時間での現在時刻を取得（UTC+9）
+now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+current_hour = now.hour
+
+# 許可された時間（13時〜翌4時）以外なら即終了
+if not (13 <= current_hour or current_hour < 4):
+    print(f"[{now.strftime('%Y-%m-%d %H:%M')}] Bot is outside operating hours. Shutting down.")
+    sys.exit()
+
 bot.run(token)
