@@ -177,8 +177,8 @@ now = datetime.utcnow() + timedelta(hours=9)
 current_hour = now.hour
 
 # 許可された時間（13時〜翌4時）以外なら即終了
-if not (current_hour >= 12 or current_hour < 4):
-    print(f"[{now.strftime('%Y-%m-%d %H:%M')}] Bot is outside operating hours. Shutting down.")
-    sys.exit()
+#if not (current_hour >= 12 or current_hour < 4):
+    #print(f"[{now.strftime('%Y-%m-%d %H:%M')}] Bot is outside operating hours. Shutting down.")
+    #sys.exit()
 
 bot.run(token)
