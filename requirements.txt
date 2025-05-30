@@ -1,0 +1,5 @@
+# Discord Bot dependencies
+discord.py>=2.3.2
+python-dotenv>=0.21.0
+
+# 他に必要なライブラリがあれば追記
