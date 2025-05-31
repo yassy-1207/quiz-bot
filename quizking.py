@@ -76,7 +76,7 @@ class QuizSetupView(discord.ui.View):
 
 def setup_quizking(bot: commands.Bot):
     # /くいず コマンド: 設定 + 参加ボタン表示
-    @bot.tree.command(name="くいず", description="カテゴリ・難易度・問題数を指定してクイズを準備")
+    @bot.tree.command(name="クイズ大会", description="カテゴリ・難易度・問題数を指定してクイズを準備")
     @discord.app_commands.describe(
         category="出題カテゴリ",
         difficulty="難易度",

@@ -118,7 +118,7 @@ def resolve_turn(p1: Player, p2: Player):
 
 def setup_tankbattle(bot: commands.Bot):
 
-    @bot.tree.command(name='たいせん', description='2人同時ターン制ミニ戦車バトル')
+    @bot.tree.command(name='ミニ戦車バトル', description='2人同時ターン制ミニ戦車バトル')
     async def make_room(interaction: discord.Interaction):
         room_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
         rooms[room_id] = {'channel': interaction.channel, 'players': [], 'started': False}
