@@ -164,7 +164,7 @@ def setup_quizking(bot: commands.Bot):
             await channel.send("😢 正解者なしでした。")
 
     # 中断コマンド
-    @bot.tree.command(name="中断", description="クイズを中断します")
+    @bot.tree.command(name="クイズ中断", description="クイズを中断します")
     async def cancel(interaction: discord.Interaction):
         cid = interaction.channel.id
         if tmp_sessions.get(cid):
