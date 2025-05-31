@@ -32,6 +32,44 @@ setup_quizking(bot)
 from tankbattle import setup_tankbattle
 setup_tankbattle(bot)
 
+@bot.tree.command(name="ルール", description="各ゲームのルールを表示します")
+@discord.app_commands.describe(game="対象ゲーム名を選んでください")
+@discord.app_commands.choices(game=[
+    discord.app_commands.Choice(name="クイズ", value="quiz"),
+    discord.app_commands.Choice(name="ミニ戦車バトル", value="tank"),
+    discord.app_commands.Choice(name="人狼（準備中）", value="werewolf")
+])
+async def rule(interaction: discord.Interaction, game: str):
+    if game == "quiz":
+        text = (
+            "📚 **クイズのルール**\n"
+            "- カテゴリと難易度を選んでクイズを出題！\n"
+            "- 参加者全員で競い合い、最も正解数が多い人が勝利。\n"
+            "- 制限時間内に答えないと不正解になるよ。\n"
+        )
+    elif game == "tank":
+        text = (
+            "🔫 **ミニ戦車バトルのルール**\n"
+            "- 2人1対1でターン制バトル。\n"
+            "- 毎ターン、5つのコマンドから1つを選択：\n"
+            "  ・バリア（全攻撃を無効、連続不可）\n"
+            "  ・チャージ（攻撃のためのエネルギーを蓄積）\n"
+            "  ・1～3チャージ発射（チャージ量に応じた攻撃）\n"
+            "- HPが0になったら敗北！DMで選択、非公開バトル！"
+        )
+    elif game == "werewolf":
+        text = (
+            "🐺 **人狼ゲーム（準備中）**\n"
+            "- 参加者にランダムで役職が割り振られます。\n"
+            "- 昼に議論、夜に人狼が行動。\n"
+            "- 生き残るのは村人か人狼か！？（詳細は後日）"
+        )
+    else:
+        text = "❌ 不明なゲーム名です。"
+
+    await interaction.response.send_message(text, ephemeral=True)
+
+
 # === Bot起動イベント ===
 @bot.event
 async def on_ready():
