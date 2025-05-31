@@ -57,7 +57,7 @@ class QuizSetupView(discord.ui.View):
         uid = interaction.user.id
         lst = tmp_participants.setdefault(self.channel_id, set())
         lst.add(uid)
-        await interaction.response.send_message(f"✅ {interaction.user.mention} が参加登録されました", ephemeral=True)
+        await interaction.response.send_message(f"✅ {interaction.user.mention} が参加登録されました")
 
     @discord.ui.button(label="締切・開始する", style=discord.ButtonStyle.success)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -65,12 +65,22 @@ class QuizSetupView(discord.ui.View):
         # 必要設定取得
         settings = tmp_settings.get(cid)
         if not settings:
-            await interaction.response.send_message("❌ 設定情報が見つかりません。再度/くいずを実行してください。", ephemeral=True)
+            await interaction.response.send_message("❌ 設定情報が見つかりません。再度[/クイズ大会]を実行してください。", ephemeral=True)
             return
         # 参加締切
         tmp_ready[cid] = True
+
+        # 参加者一覧の取得と整形
+        participant_ids = tmp_participants.get(cid, set())
+        if participant_ids:
+            members = [f"・<@{uid}>" for uid in participant_ids]
+            participant_text = "\n".join(members)
+            await interaction.channel.send(f"🧑‍🤝‍🧑 参加者一覧：\n{participant_text}")
+        else:
+            await interaction.channel.send("⚠️ 参加者が確認できませんでした。")
+
+        # 通知と開始
         await interaction.response.send_message("🚀 参加締切＆クイズ開始します！", ephemeral=False)
-        # 開始
         await run_quiz(interaction.channel, **settings)
 
 
