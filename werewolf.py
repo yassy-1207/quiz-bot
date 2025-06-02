@@ -15,6 +15,7 @@ VOTE_WARNING_TIME = 30  # 投票終了30秒前に警告
 VOTE_TIME = 180  # 投票時間3分
 DISCUSSION_TIME = 300  # 議論時間5分
 NIGHT_TIME = 180  # 夜のアクション時間3分
+FIRST_NIGHT_TIME = 60  # 初日夜のアクション時間1分
 
 # グローバル変数の定義
 werewolf_bot = None
@@ -483,16 +484,22 @@ async def wait_for_night_actions(cid: int):
     num_wolves = sum(1 for uid, role in room["role_map"].items() 
                     if role == "人狼" and uid in room["alive"])
 
-    # アクションが揃うまで待機（最大2分）
-    for _ in range(120):  # 2分 = 120秒
+    # 初日は人狼の襲撃なし
+    is_first_night = room["day_count"] == 1
+    if is_first_night:
+        room["night_actions"]["werewolf_targets"] = []  # 初日は襲撃なし
+
+    # アクションが揃うまで待機（初日は1分、それ以外は2分）
+    wait_time = FIRST_NIGHT_TIME if is_first_night else NIGHT_TIME
+    for _ in range(wait_time):
         if room["phase"] != "night":  # 夜フェーズが終了していたら
             return
 
         w_targets = room["night_actions"]["werewolf_targets"]
         s_target = room["night_actions"]["seer_target"]
         
-        # 人狼の投票と占い師の占いが揃ったら
-        if len(w_targets) >= num_wolves and (
+        # 人狼の投票と占い師の占いが揃ったら（初日は人狼の投票は不要）
+        if (is_first_night or len(w_targets) >= num_wolves) and (
             s_target is not None or  # 占い師の占い完了
             not any(uid for uid, role in room["role_map"].items()  # または生存占い師なし
                    if role == "占い師" and uid in room["alive"])
@@ -507,8 +514,8 @@ async def wait_for_night_actions(cid: int):
         channel = werewolf_bot.get_channel(cid)
         await channel.send("⏰ 時間切れです。未投票はランダムに決定されます。")
         
-        # 人狼の未投票をランダム決定
-        if len(room["night_actions"]["werewolf_targets"]) < num_wolves:
+        # 人狼の未投票をランダム決定（初日以外）
+        if not is_first_night and len(room["night_actions"]["werewolf_targets"]) < num_wolves:
             alive_targets = [uid for uid in room["alive"] 
                            if room["role_map"][uid] != "人狼"]
             if alive_targets:
@@ -726,6 +733,8 @@ async def send_roles_and_start(cid: int):
             if other_wolves:
                 wolf_info = "、".join(f"<@{wid}>" for wid in other_wolves)
                 await user.send(f"🐺 仲間の人狼は {wolf_info} です。")
+            # 初日は襲撃なしを通知
+            await user.send("🌙 初日の夜は襲撃できません。")
         elif role == "占い師":
             # 初日はランダムな対象を占う
             possible_targets = [pid for pid in room["alive"] if pid != uid]
@@ -737,7 +746,11 @@ async def send_roles_and_start(cid: int):
     # 全体通知
     await channel.send("🌙 初日の夜です。各役職は DM を確認してください。")
     
-    # 夜アクション待機
+    # フェーズスキップボタンを表示
+    view = PhaseSkipView(cid)
+    await channel.send("⏩ 全員の準備が整ったら、次のフェーズへスキップできます：", view=view)
+    
+    # 夜アクション待機（初日は1分）
     asyncio.create_task(wait_for_night_actions(cid))
 
 # === 投票処理の改善 ===
@@ -773,3 +786,27 @@ async def send_dm_or_channel(user: discord.User, channel: discord.TextChannel, m
         else:
             await channel.send(mention_msg)
         return False
+
+class PhaseSkipView(discord.ui.View):
+    def __init__(self, cid: int):
+        super().__init__(timeout=None)
+        self.cid = cid
+
+    @discord.ui.button(label="次のフェーズへ", style=discord.ButtonStyle.primary)
+    async def skip_phase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        room = werewolf_rooms.get(self.cid)
+        if not room:
+            await interaction.response.send_message("❌ この部屋は存在しません。", ephemeral=True)
+            return
+
+        # 参加者チェック
+        if interaction.user.id not in [p.id for p in room["players"]]:
+            await interaction.response.send_message("⚠️ このゲームの参加者ではありません。", ephemeral=True)
+            return
+
+        if room["phase"] == "night":
+            await process_night_results(self.cid)
+        elif room["phase"] == "day":
+            await process_day_results(self.cid)
+
+        await interaction.response.send_message("⏩ フェーズをスキップしました。", ephemeral=False)
