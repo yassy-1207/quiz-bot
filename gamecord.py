@@ -46,8 +46,8 @@ from tankbattle import setup_tankbattle
 setup_tankbattle(bot)
 
 # === werewolfの機能（関数・コマンド）を読み込む ===
-#from werewolf import setup_werewolf
-#setup_werewolf(bot)
+from werewolf import setup_werewolf
+setup_werewolf(bot)
 
 # === ルール表示コマンド ===
 @bot.tree.command(name="ルール", description="各ゲームのルールを表示します")
