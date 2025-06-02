@@ -20,9 +20,43 @@ intents.members = True
 # =============================
 # {プレイヤー人数: [役職セット1, 役職セット2, ...]}
 ROLE_PRESETS = {
-    3: [["村人", "村人", "人狼"], ["村人", "占い師", "人狼"]],
-    4: [["村人", "村人", "村人", "人狼"], ["村人", "占い師", "村人", "人狼"]],
-    5: [["村人", "村人", "占い師", "狂人", "人狼"]],
+    3: [
+        ["村人", "村人", "人狼"],  # 基本セット
+        ["村人", "占い師", "人狼"],  # 占い師セット
+        ["村人", "狂人", "人狼"],  # 狂人セット
+    ],
+    4: [
+        ["村人", "村人", "村人", "人狼"],  # 基本セット
+        ["村人", "占い師", "村人", "人狼"],  # 占い師セット
+        ["村人", "村人", "狂人", "人狼"],  # 狂人セット
+        ["村人", "占い師", "狂人", "人狼"],  # バランスセット
+    ],
+    5: [
+        ["村人", "村人", "占い師", "狂人", "人狼"],  # 基本セット
+        ["村人", "村人", "村人", "人狼", "人狼"],  # 人狼2セット
+        ["村人", "村人", "占い師", "人狼", "人狼"],  # 占い師・人狼2セット
+        ["村人", "占い師", "狂人", "人狼", "人狼"],  # フルバリエーションセット
+    ],
+    6: [
+        ["村人", "村人", "村人", "占い師", "狂人", "人狼"],  # 基本セット
+        ["村人", "村人", "占い師", "狂人", "人狼", "人狼"],  # 人狼2セット
+        ["村人", "村人", "村人", "占い師", "人狼", "人狼"],  # 占い師・人狼2セット
+        ["村人", "村人", "占い師", "狂人", "狂人", "人狼"],  # 狂人2セット
+    ],
+    7: [
+        ["村人", "村人", "村人", "占い師", "狂人", "人狼", "人狼"],  # 基本セット
+        ["村人", "村人", "村人", "占い師", "占い師", "人狼", "人狼"],  # 占い師2セット
+        ["村人", "村人", "村人", "占い師", "狂人", "狂人", "人狼"],  # 狂人2セット
+        ["村人", "村人", "占い師", "狂人", "狂人", "人狼", "人狼"],  # フルバリエーションセット
+    ],
+}
+
+# 役職の説明文
+ROLE_DESCRIPTIONS = {
+    "村人": "特別な能力は持ちませんが、話し合いで人狼を見つけ出しましょう。",
+    "人狼": "夜フェーズで村人を襲撃できます。村人に悟られないように立ち回りましょう。",
+    "占い師": "夜フェーズで1人を占い、人狼かどうかを知ることができます。",
+    "狂人": "人狼陣営の村人です。人狼のことを知っていますが、村人のふりをして人狼を勝利に導きましょう。"
 }
 
 # =============================
@@ -60,14 +94,18 @@ ERROR_MESSAGES = {
 }
 
 def setup_werewolf(bot: commands.Bot):
+    """
+    人狼ゲームの機能をbotに設定する
+    """
     global werewolf_bot
     werewolf_bot = bot
 
+    # === コマンド定義 ===
     @bot.tree.command(name="じんろう", description="人狼ゲームを始めます")
-    @app_commands.describe(players="プレイヤー数（3〜5）")
+    @app_commands.describe(players="プレイヤー数（3〜7）")
     async def werewolf(interaction: discord.Interaction, players: int):
-        if not 3 <= players <= 5:
-            await interaction.response.send_message("⚠️ プレイヤー数は3〜5人で指定してください。", ephemeral=True)
+        if not 3 <= players <= 7:
+            await interaction.response.send_message("⚠️ プレイヤー数は3〜7人で指定してください。", ephemeral=True)
             return
 
         cid = interaction.channel.id
@@ -80,12 +118,24 @@ def setup_werewolf(bot: commands.Bot):
             await interaction.response.send_message("⚠️ 指定されたプレイヤー数の役職セットが見つかりません。", ephemeral=True)
             return
 
-        view = RoleSelectionView(role_sets)
-        await interaction.response.send_message(
-            f"🐺 人狼ゲームを開始します（{players}人）\n"
+        # 役職セットの説明を生成
+        set_descriptions = []
+        for i, role_set in enumerate(role_sets, 1):
+            role_counts = Counter(role_set)
+            desc_parts = []
+            for role, count in role_counts.items():
+                desc_parts.append(f"{role}×{count}")
+            set_descriptions.append(f"セット{i}: {', '.join(desc_parts)}")
+
+        description = "\n".join([
+            f"🐺 人狼ゲームを開始します（{players}人）",
             "以下から役職セットを選んでください：",
-            view=view
-        )
+            "",  # 空行を追加
+            *set_descriptions
+        ])
+
+        view = RoleSelectionView(role_sets)
+        await interaction.response.send_message(description, view=view)
 
     @bot.tree.command(name="じんろう中断", description="進行中の人狼ゲームを中断します")
     async def cancel_game(interaction: discord.Interaction):
@@ -112,6 +162,15 @@ def setup_werewolf(bot: commands.Bot):
             await interaction.response.send_message("🔄 部屋をリセットしました。人狼ゲームを強制終了しました。", ephemeral=False)
         else:
             await interaction.response.send_message("❌ このチャンネルでは進行中の人狼ゲームがありません。", ephemeral=True)
+
+    # === イベントリスナー定義 ===
+    @bot.event
+    async def on_ready():
+        await bot.tree.sync()
+        print(f"{bot.user} 起動完了")
+
+    # 既存のコードをsetup_werewolf関数内に移動
+    return bot
 
 # =============================
 # JoinView の定義
@@ -596,21 +655,6 @@ async def send_roles_and_start(cid: int):
 
     # 【4】 夜アクション待機タスクを起動
     asyncio.create_task(wait_for_night_actions(cid))
-
-# =============================
-# ==== Bot 起動イベント ====
-# =============================
-@werewolf_bot.event
-async def on_ready():
-    await werewolf_bot.tree.sync()
-    print(f"{werewolf_bot.user} 起動完了")
-
-# =============================
-# ==== 実行処理 ====
-# =============================
-load_dotenv()
-token = os.getenv("token")
-werewolf_bot.run(token)
 
 # === 投票処理の改善 ===
 def get_vote_results(votes: dict) -> tuple[int, int]:
