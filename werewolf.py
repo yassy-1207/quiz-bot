@@ -152,27 +152,6 @@ def setup_werewolf(bot: commands.Bot):
         view = RoleSelectionView(role_sets)
         await interaction.response.send_message(description, view=view)
 
-    @bot.tree.command(name="投票", description="処刑する人に投票します")
-    async def vote(interaction: discord.Interaction):
-        cid = interaction.channel.id
-        room = werewolf_rooms.get(cid)
-        if not room:
-            await interaction.response.send_message("❌ このチャンネルでは人狼ゲームが進行していません。", ephemeral=True)
-            return
-
-        if room["phase"] != "day":
-            await interaction.response.send_message("⚠️ 今は投票フェーズではありません。", ephemeral=True)
-            return
-
-        uid = interaction.user.id
-        if uid not in room["alive"]:
-            await interaction.response.send_message("⚠️ あなたは既に死亡しています。", ephemeral=True)
-            return
-
-        # 投票用のボタンを全員に表示
-        view = VoteView(cid)
-        await interaction.response.send_message("👇 全員投票してください：", view=view, ephemeral=False)
-
     @bot.tree.command(name="じんろう中断", description="進行中の人狼ゲームを中断します")
     async def cancel_game(interaction: discord.Interaction):
         cid = interaction.channel.id
@@ -225,7 +204,6 @@ def setup_werewolf(bot: commands.Bot):
             "",
             "**■ コマンド一覧**",
             "・`/じんろう [人数]`：人狼ゲームを開始",
-            "・`/投票`：処刑する人に投票（昼フェーズで使用）",
             "・`/じんろう中断`：進行中のゲームを中断",
             "・`/じんろうリセット`：ゲームを強制終了",
             "・`/じんろうヘルプ`：このヘルプを表示"
@@ -405,19 +383,25 @@ async def process_night_results(cid: int):
     room["phase"] = "day"
     room["day_count"] = room.get("day_count", 1) + 1
     
-    # 議論フェーズの説明を追加
+    # 議論フェーズの説明と投票ボタンを追加
     await channel.send(
         "💬 **議論の時間です**\n"
         "1. 話し合いで人狼を推理しましょう\n"
-        "2. 議論が終わったら、`/投票` コマンドを実行して投票を開始してください\n"
+        "2. 以下のボタンから投票してください\n"
         "3. 投票で最多票を集めたプレイヤーが処刑されます\n"
-        "※ 全員の投票が完了するか、制限時間が経過すると自動的に処刑が実行されます"
+        "※ 全員の投票が完了するか、3分の制限時間が経過すると自動的に処刑が実行されます"
     )
 
+    # 投票ボタンを表示
+    view = VoteView(cid)
+    await channel.send("👇 投票する相手を選んでください：", view=view)
+
+    # 新しいフェーズスキップボタンを表示
+    skip_view = PhaseSkipView(cid)
+    await channel.send("⏩ 全員の準備が整ったら、次のフェーズへスキップできます：", view=skip_view)
+
 async def process_day_results(cid: int):
-    """
-    昼フェーズの投票結果を集計し、吊るし処理 → 勝敗判定 → 夜へ移行または終了。
-    """
+    """昼フェーズの投票結果を集計し、吊るし処理 → 勝敗判定 → 夜へ移行または終了。"""
     room = werewolf_rooms.get(cid)
     channel = werewolf_bot.get_channel(cid)
     if not room:
@@ -436,17 +420,19 @@ async def process_day_results(cid: int):
             chosen = random.choice(list(room["alive"]))
             room["alive"].remove(chosen)
             room["dead"].add(chosen)
-            await channel.send(f"🔨 誰も投票しなかったため、ランダムで <@{chosen}> を吊りました。")
+            chosen_name = werewolf_bot.get_user(chosen).display_name
+            await channel.send(f"🔨 誰も投票しなかったため、ランダムで {chosen_name} を吊りました。")
     else:
         if target_id in room["alive"]:
             room["alive"].remove(target_id)
             room["dead"].add(target_id)
+            target_name = werewolf_bot.get_user(target_id).display_name
             # 同数得票の場合はその旨を表示
             max_voted = [uid for uid, v_count in Counter(vote_map.values()).items() if v_count == count]
             if len(max_voted) > 1:
-                await channel.send(f"🔨 同数得票のため、ランダムで <@{target_id}> が選ばれ、{count} 票で吊られました。")
+                await channel.send(f"🔨 同数得票のため、ランダムで {target_name} が選ばれ、{count} 票で吊られました。")
             else:
-                await channel.send(f"🔨 投票の結果、<@{target_id}> に {count} 票が入り、吊られました。")
+                await channel.send(f"🔨 投票の結果、{target_name} に {count} 票が入り、吊られました。")
 
     # 勝敗判定
     winner, message = check_win_condition(room)
@@ -467,7 +453,12 @@ async def process_day_results(cid: int):
     }
     await channel.send("🌙 夜になります。各役職は DM を確認してください。")
 
+    # 夜アクションの送信
     await send_night_actions(cid)
+
+    # 新しいフェーズスキップボタンを表示
+    view = PhaseSkipView(cid)
+    await channel.send("⏩ 全員の準備が整ったら、次のフェーズへスキップできます：", view=view)
 
 async def show_game_summary(cid: int):
     """
@@ -762,7 +753,7 @@ class KnightProtectButton(discord.ui.Button):
 
 class VoteView(discord.ui.View):
     def __init__(self, cid: int):
-        super().__init__(timeout=60)  # 1分でタイムアウト
+        super().__init__(timeout=180)  # 3分でタイムアウト
         self.cid = cid
         self.room = werewolf_rooms.get(cid)
         if not self.room:
@@ -776,6 +767,13 @@ class VoteView(discord.ui.View):
         for player in self.room["players"]:
             if player.id in self.room["alive"]:
                 self.add_item(VoteButton(player))
+
+    async def on_timeout(self):
+        """タイムアウト時の処理"""
+        channel = werewolf_bot.get_channel(self.cid)
+        if channel:
+            await channel.send("⏰ 投票時間が終了しました。未投票者は自動的にランダム投票となります。")
+            await process_day_results(self.cid)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         # 投票済みチェック
@@ -811,7 +809,7 @@ class VoteButton(discord.ui.Button):
             room.setdefault("votes", {})[voter_id] = int(self.custom_id)
             room.setdefault("voted_players", set()).add(voter_id)
             
-            # 全てのボタンを無効化（この投票者に対して）
+            # このユーザーの全てのボタンを無効化
             for child in self.view.children:
                 child.disabled = True
             await interaction.response.edit_message(view=self.view)
@@ -944,7 +942,7 @@ async def send_roles_and_start(cid: int):
     # 全体通知
     await channel.send("🌙 初日の夜です。各役職は DM を確認してください。")
 
-    # フェーズスキップボタンを表示
+    # 新しいフェーズスキップボタンを表示
     view = PhaseSkipView(cid)
     await channel.send("⏩ 全員の準備が整ったら、次のフェーズへスキップできます：", view=view)
     
@@ -1005,7 +1003,7 @@ class PhaseSkipView(discord.ui.View):
         super().__init__(timeout=None)
         self.cid = cid
 
-    @discord.ui.button(label="次のフェーズへ", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="次のフェーズへ", style=discord.ButtonStyle.danger)  # 赤色に変更
     async def skip_phase(self, interaction: discord.Interaction, button: discord.ui.Button):
         room = werewolf_rooms.get(self.cid)
         if not room:
