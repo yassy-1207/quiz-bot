@@ -276,50 +276,66 @@ class JoinView(discord.ui.View):
 
     @discord.ui.button(label="参加する", style=discord.ButtonStyle.success)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cid = self.channel_id
-        room = werewolf_rooms.get(cid)
-        if not room:
-            await interaction.response.send_message("❌ この部屋は存在しません。", ephemeral=True)
-            return
+        try:
+            cid = self.channel_id
+            room = werewolf_rooms.get(cid)
+            if not room:
+                await interaction.response.send_message("❌ この部屋は存在しません。", ephemeral=True)
+                return
 
-        # 参加済みチェック
-        if interaction.user.id in [u.id for u in room["players"]]:
-            await interaction.response.send_message("⚠️ すでに参加しています。", ephemeral=True)
-            return
+            # 参加済みチェック
+            if interaction.user.id in [u.id for u in room["players"]]:
+                await interaction.response.send_message("⚠️ すでに参加しています。", ephemeral=True)
+                return
 
-        # 定員チェック
-        if len(room["players"]) >= len(room["role_set"]):
-            await interaction.response.send_message("⚠️ 定員に達しています。", ephemeral=True)
-            return
+            # 定員チェック
+            if len(room["players"]) >= len(room["role_set"]):
+                await interaction.response.send_message("⚠️ 定員に達しています。", ephemeral=True)
+                return
 
-        # 参加者リストに追加
-        room["players"].append(interaction.user)
-        remaining = len(room["role_set"]) - len(room["players"])
-        
-        # 残り時間を計算（discord.utils.utcnowを使用）
-        if self._timeout_expiry:
-            remaining_time = int((self._timeout_expiry - discord.utils.utcnow()).total_seconds())
-        else:
-            remaining_time = 0
+            # 参加者リストに追加
+            room["players"].append(interaction.user)
+            remaining = len(room["role_set"]) - len(room["players"])
+            
+            try:
+                # 参加メッセージを送信
+                if remaining > 0:
+                    await interaction.response.send_message(
+                        f"✅ {interaction.user.mention} が参加しました！\n"
+                        f"あと{remaining}人必要です。（制限時間: 残り約{int(JOIN_TIMEOUT - len(room['players']) * 10)}秒）", 
+                        ephemeral=False
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"✅ {interaction.user.mention} が参加しました！\n"
+                        "参加者が揃いました！ゲームを開始します。", 
+                        ephemeral=False
+                    )
+            except discord.errors.InteractionResponded:
+                # すでに応答済みの場合は、フォローアップメッセージを送信
+                await interaction.followup.send(
+                    f"✅ {interaction.user.mention} が参加しました！",
+                    ephemeral=False
+                )
 
-        # 参加メッセージを送信
-        if remaining > 0:
-            await interaction.response.send_message(
-                f"✅ {interaction.user.mention} が参加しました！\n"
-                f"あと{remaining}人必要です。（募集締切まで残り約{remaining_time}秒）", 
-                ephemeral=False
-            )
-        else:
-            await interaction.response.send_message(
-                f"✅ {interaction.user.mention} が参加しました！\n"
-                "参加者が揃いました！ゲームを開始します。", 
-                ephemeral=False
-            )
+            # 参加者数が役職数と揃ったら、役職配布 → 夜フェーズへ
+            if len(room["players"]) == len(room["role_set"]):
+                await asyncio.sleep(1)
+                await send_roles_and_start(cid)
 
-        # 参加者数が役職数と揃ったら、役職配布 → 夜フェーズへ
-        if len(room["players"]) == len(room["role_set"]):
-            await asyncio.sleep(1)
-            await send_roles_and_start(cid)
+        except Exception as e:
+            # エラーが発生した場合のフォールバック処理
+            try:
+                error_msg = f"⚠️ エラーが発生しました: {str(e)}"
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(error_msg, ephemeral=True)
+                else:
+                    await interaction.followup.send(error_msg, ephemeral=True)
+            except:
+                # 最後の手段として、チャンネルにエラーメッセージを送信
+                channel = werewolf_bot.get_channel(self.channel_id)
+                if channel:
+                    await channel.send(f"⚠️ {interaction.user.mention} の参加処理中にエラーが発生しました。もう一度お試しください。")
 
 # =============================
 # フェーズ処理のヘルパー関数群
