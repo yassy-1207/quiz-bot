@@ -12,7 +12,7 @@ now = datetime.utcnow() + timedelta(hours=9)
 current_hour = now.hour
 if not (current_hour >= 12 or current_hour < 4):
     print(f"[{now.strftime('%Y-%m-%d %H:%M')}] Bot is outside operating hours. Shutting down.")
-    #sys.exit(0)
+    sys.exit(0)
 
 # === Discord Bot 基本設定 ===
 intents = discord.Intents.default()
