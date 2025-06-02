@@ -295,12 +295,26 @@ class JoinView(discord.ui.View):
         # 参加者リストに追加
         room["players"].append(interaction.user)
         remaining = len(room["role_set"]) - len(room["players"])
-        remaining_time = self.timeout_remaining()
-        await interaction.response.send_message(
-            f"✅ {interaction.user.mention} が参加しました！\n"
-            f"あと{remaining}人必要です。（募集締切まで残り{remaining_time}秒）", 
-            ephemeral=False
-        )
+        
+        # 残り時間を計算（discord.utils.utcnowを使用）
+        if self._timeout_expiry:
+            remaining_time = int((self._timeout_expiry - discord.utils.utcnow()).total_seconds())
+        else:
+            remaining_time = 0
+
+        # 参加メッセージを送信
+        if remaining > 0:
+            await interaction.response.send_message(
+                f"✅ {interaction.user.mention} が参加しました！\n"
+                f"あと{remaining}人必要です。（募集締切まで残り約{remaining_time}秒）", 
+                ephemeral=False
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ {interaction.user.mention} が参加しました！\n"
+                "参加者が揃いました！ゲームを開始します。", 
+                ephemeral=False
+            )
 
         # 参加者数が役職数と揃ったら、役職配布 → 夜フェーズへ
         if len(room["players"]) == len(room["role_set"]):
