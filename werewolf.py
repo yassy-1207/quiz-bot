@@ -356,11 +356,12 @@ def check_win_condition(room: dict) -> tuple[str | None, str]:
     
     # 人狼の数をカウント（狂人は含まない）
     num_wolves = sum(1 for uid in alive_ids if room["role_map"][uid] == "人狼")
+    num_villagers = num_alive - num_wolves  # 生存者から人狼を引いた数（狂人含む）
 
     if num_wolves == 0:
         return "villagers", "🎉 人狼が全滅したため、村人陣営の勝利です！"
-    elif num_wolves * 2 >= num_alive:
-        return "werewolves", "🐺 人狼が村人と同数以上になったため、人狼陣営の勝利です！"
+    elif num_wolves >= num_villagers:  # 人狼が村人陣営以上になった場合
+        return "werewolves", "🐺 人狼が村人陣営と同数以上になったため、人狼陣営の勝利です！"
     return None, ""
 
 async def process_night_results(cid: int):
@@ -435,58 +436,25 @@ async def process_day_results(cid: int):
     if not room:
         return
 
-    vote_map = room.get("votes", {})
-    target_id, count, vote_details = get_vote_results(vote_map, room)
-    
-    # 投票結果を表示
-    if channel and vote_details:
-        await send_vote_results(channel, vote_details)
-    
-    if target_id is None:
-        # 投票なし→ランダム吊り
-        if room["alive"]:
-            chosen = random.choice(list(room["alive"]))
-            room["alive"].remove(chosen)
-            room["dead"].add(chosen)
-            chosen_name = werewolf_bot.get_user(chosen).display_name
-            await channel.send(f"🔨 誰も投票しなかったため、ランダムで {chosen_name} を吊りました。")
-    else:
-        if target_id in room["alive"]:
-            room["alive"].remove(target_id)
-            room["dead"].add(target_id)
-            target_name = werewolf_bot.get_user(target_id).display_name
-            # 同数得票の場合はその旨を表示
-            max_voted = [uid for uid, v_count in Counter(vote_map.values()).items() if v_count == count]
-            if len(max_voted) > 1:
-                await channel.send(f"🔨 同数得票のため、ランダムで {target_name} が選ばれ、{count} 票で吊られました。")
-            else:
-                await channel.send(f"🔨 投票の結果、{target_name} に {count} 票が入り、吊られました。")
+    # 生存者のみに投票ボタンを表示
+    for user_id in room["alive"]:
+        user = werewolf_bot.get_user(user_id)
+        if user:
+            view = VoteView(cid)
+            # 生存者のみをボタンとして追加
+            for target_id in room["alive"]:
+                if target_id != user_id:  # 自分以外
+                    target_user = werewolf_bot.get_user(target_id)
+                    if target_user:
+                        view.add_item(VoteButton(target_user))
+            try:
+                await user.send("👇 投票する相手を選んでください：", view=view)
+            except discord.Forbidden:
+                # DMが送れない場合はチャンネルでメンション付きで表示
+                await channel.send(f"<@{user_id}> 投票する相手を選んでください：", view=view)
 
-    # 勝敗判定
-    winner, message = check_win_condition(room)
-    if winner:
-        await channel.send(message)
-        await show_game_summary(cid)
-        del werewolf_rooms[cid]
-        return
-
-    # 次の夜へ
-    room["phase"] = "night"
-    room["night_actions"] = {
-        "werewolf_targets": [],
-        "seer_target": None,
-        "knight_target": None,
-        "medium_result": None,
-        "madman_info": None
-    }
-    await channel.send("🌙 夜になります。各役職は DM を確認してください。")
-
-    # 夜アクションの送信
-    await send_night_actions(cid)
-
-    # 新しいフェーズスキップボタンを表示
-    view = PhaseSkipView(cid)
-    await channel.send("⏩ 全員の準備が整ったら、次のフェーズへスキップできます：", view=view)
+    # 投票タイマーの開始
+    asyncio.create_task(wait_for_votes(cid))
 
 async def show_game_summary(cid: int):
     """
@@ -791,11 +759,6 @@ class VoteView(discord.ui.View):
         # 投票済みプレイヤーのセットを初期化
         if "voted_players" not in self.room:
             self.room["voted_players"] = set()
-        
-        # 生存者一覧からボタンを作成
-        for player in self.room["players"]:
-            if player.id in self.room["alive"]:
-                self.add_item(VoteButton(player))
 
     async def on_timeout(self):
         """タイムアウト時の処理"""
@@ -832,6 +795,11 @@ class VoteButton(discord.ui.Button):
                 return
 
             voter_id = interaction.user.id
+            
+            # 生存者チェック
+            if voter_id not in room["alive"]:
+                await interaction.response.send_message("⚠️ 死亡したプレイヤーは投票できません。", ephemeral=True)
+                return
 
             # 投票を記録
             room.setdefault("votes", {})[voter_id] = int(self.custom_id)
@@ -855,7 +823,7 @@ class VoteButton(discord.ui.Button):
 
             # 投票状況を全体に通知
             channel = interaction.channel
-            total_voters = len(room["alive"])
+            total_voters = len(room["alive"])  # 生存者数
             current_votes = len(room["votes"])
             await channel.send(f"💫 投票状況: {current_votes}/{total_voters} 人が投票済み")
 
