@@ -84,76 +84,76 @@ def setup_tankbattle(bot: commands.Bot):
 
     async def start_game(room: dict):
         try:
-            room_id = next(k for k,v in rooms.items() if v is room)
-            channel = room['channel']
-            players = room['players']
-            room['started'] = True
+        room_id = next(k for k,v in rooms.items() if v is room)
+        channel = room['channel']
+        players = room['players']
+        room['started'] = True
 
-            # ゲーム開始DM
-            for p in players:
-                try:
-                    await p.user.send(f"🔥 ゲーム開始！HP={p.hp} / Charge={p.charge}\n" +
-                                    "(※30秒以内に未選択時は自動で『チャージ』が選択されます)")
-                    p.last_choice = None
-                except discord.Forbidden:
-                    await channel.send(f"⚠️ {p.user.mention} へのDMが送れません。DMを有効にしてください。")
+        # ゲーム開始DM
+        for p in players:
+            try:
+                await p.user.send(f"🔥 ゲーム開始！HP={p.hp} / Charge={p.charge}\n" +
+                                "(※30秒以内に未選択時は自動で『チャージ』が選択されます)")
+                p.last_choice = None
+            except discord.Forbidden:
+                await channel.send(f"⚠️ {p.user.mention} へのDMが送れません。DMを有効にしてください。")
                     return
 
-            # ターンループ
-            while all(p.hp > 0 for p in players):
+        # ターンループ
+        while all(p.hp > 0 for p in players):
                 # 中断確認
                 if not room.get('started', False):
                     await channel.send("🛑 ゲームが中断されました。")
                     return
 
-                # 各プレイヤーへ結果と選択DM
-                for p in players:
-                    opponent = players[1] if p is players[0] else players[0]
-                    embed = discord.Embed(title='💥 ターン結果', color=discord.Color.blue())
-                    embed.add_field(name='あなた', value=f"HP: {p.hp}\nCharge: {p.charge}", inline=True)
-                    embed.add_field(name='相手', value=f"HP: {opponent.hp}\nCharge: {opponent.charge}", inline=True)
-                    embed.set_footer(text='コマンドを選択 (30秒以内; 未選択時はチャージ)')
-                    view = CommandSelectionView(p)
-                    try:
-                        await p.user.send(embed=embed, view=view)
-                    except discord.Forbidden:
-                        await channel.send(f"⚠️ {p.user.mention} へのDMが送れません。")
+            # 各プレイヤーへ結果と選択DM
+            for p in players:
+                opponent = players[1] if p is players[0] else players[0]
+                embed = discord.Embed(title='💥 ターン結果', color=discord.Color.blue())
+                embed.add_field(name='あなた', value=f"HP: {p.hp}\nCharge: {p.charge}", inline=True)
+                embed.add_field(name='相手', value=f"HP: {opponent.hp}\nCharge: {opponent.charge}", inline=True)
+                embed.set_footer(text='コマンドを選択 (30秒以内; 未選択時はチャージ)')
+                view = CommandSelectionView(p)
+                try:
+                    await p.user.send(embed=embed, view=view)
+                except discord.Forbidden:
+                    await channel.send(f"⚠️ {p.user.mention} へのDMが送れません。")
                         return
 
-                # 選択待機
-                await asyncio.gather(*[wait_for_choice(p) for p in players])
+            # 選択待機
+            await asyncio.gather(*[wait_for_choice(p) for p in players])
                 
-                # 解決
-                resolve_turn(players[0], players[1])
+            # 解決
+            resolve_turn(players[0], players[1])
                 
-                # choiceとlast_choice更新
-                for p in players:
-                    p.last_choice = p.choice
-                    p.choice = None
-
-            # 勝敗
-            winner, loser = (players[0], players[1]) if players[0].hp > 0 else (players[1], players[0])
-            await channel.send(f"🏆 {winner.user.mention} の勝利！{loser.user.mention} を撃破！")
-            
-            # DM勝敗通知
+            # choiceとlast_choice更新
             for p in players:
-                try:
-                    result = '勝利' if p is winner else '敗北'
-                    opp = loser if p is winner else winner
-                    await p.user.send(
-                        f"🏁 ゲーム終了 — {result}\n"
-                        f"あなた: HP={p.hp} / Charge={p.charge}\n"
-                        f"相手: HP={opp.hp} / Charge={opp.charge}"
-                    )
-                except discord.Forbidden:
-                    pass
+                p.last_choice = p.choice
+                p.choice = None
+
+        # 勝敗
+        winner, loser = (players[0], players[1]) if players[0].hp > 0 else (players[1], players[0])
+        await channel.send(f"🏆 {winner.user.mention} の勝利！{loser.user.mention} を撃破！")
+            
+        # DM勝敗通知
+        for p in players:
+            try:
+                result = '勝利' if p is winner else '敗北'
+                opp = loser if p is winner else winner
+                await p.user.send(
+                    f"🏁 ゲーム終了 — {result}\n"
+                    f"あなた: HP={p.hp} / Charge={p.charge}\n"
+                    f"相手: HP={opp.hp} / Charge={opp.charge}"
+                )
+            except discord.Forbidden:
+                pass
 
         except Exception as e:
             print(f"Error in tank battle: {e}")
             await channel.send("⚠️ ゲームでエラーが発生しました。")
         finally:
             if room_id in rooms:
-                del rooms[room_id]
+        del rooms[room_id]
 
     @bot.tree.command(name='戦車中断', description='進行中の戦車バトルを中断します')
     async def cancel_game(interaction: discord.Interaction):
@@ -213,12 +213,12 @@ def setup_tankbattle(bot: commands.Bot):
             view=view
         )
 
-async def wait_for_choice(player: Player):
-    for _ in range(60):
-        if player.choice is not None:
-            return
-        await asyncio.sleep(0.5)
-    player.choice = 'charge'
+    async def wait_for_choice(player: Player):
+        for _ in range(60):
+            if player.choice is not None:
+                return
+            await asyncio.sleep(0.5)
+        player.choice = 'charge'
 
 # 同時解決ロジック
 def resolve_turn(p1: Player, p2: Player):

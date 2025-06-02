@@ -100,13 +100,13 @@ async def run_quiz(channel: discord.TextChannel, category: str, difficulty: str,
                 try:
                     msg = await quiz_bot.wait_for('message', timeout=DEFAULT_TIMEOUT, check=check)
                     if msg.content.strip() == q['answer']:
-                        scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
-                        await channel.send(f"🎉 {msg.author.mention} 正解！")
+            scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
+            await channel.send(f"🎉 {msg.author.mention} 正解！")
                         answered = True
                         # 少し待ってから次の問題へ
                         await asyncio.sleep(2)
-                except asyncio.TimeoutError:
-                    await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
                     # 少し待ってから次の問題へ
                     await asyncio.sleep(2)
                     break

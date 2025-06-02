@@ -190,14 +190,14 @@ def setup_werewolf(bot: commands.Bot):
         del werewolf_rooms[cid]
         await interaction.response.send_message("🛑 人狼ゲームを中断しました。", ephemeral=False)
 
-@bot.tree.command(name="じんろうリセット", description="人狼ゲームを強制終了し、部屋情報をクリアします")
-async def reset_werewolf(interaction: discord.Interaction):
-    cid = interaction.channel.id
-    if cid in werewolf_rooms:
-        del werewolf_rooms[cid]
-        await interaction.response.send_message("🔄 部屋をリセットしました。人狼ゲームを強制終了しました。", ephemeral=False)
-    else:
-        await interaction.response.send_message("❌ このチャンネルでは進行中の人狼ゲームがありません。", ephemeral=True)
+    @bot.tree.command(name="じんろうリセット", description="人狼ゲームを強制終了し、部屋情報をクリアします")
+    async def reset_werewolf(interaction: discord.Interaction):
+        cid = interaction.channel.id
+        if cid in werewolf_rooms:
+            del werewolf_rooms[cid]
+            await interaction.response.send_message("🔄 部屋をリセットしました。人狼ゲームを強制終了しました。", ephemeral=False)
+        else:
+            await interaction.response.send_message("❌ このチャンネルでは進行中の人狼ゲームがありません。", ephemeral=True)
 
     @bot.tree.command(name="じんろうヘルプ", description="人狼ゲームのルールと役職の説明を表示します")
     async def help_werewolf(interaction: discord.Interaction):
@@ -371,7 +371,7 @@ async def process_night_results(cid: int):
     room["voted_players"] = set()
     room["attacked_by_wolf"] = set()
     room["used_seer"] = set()
-    room["used_knight"] = set()  # 騎士のアクション履歴もリセット
+    room["used_knight"] = set()
 
     # 初日の夜は最低待機時間を設ける
     if room["day_count"] == 1:
@@ -403,26 +403,19 @@ async def process_night_results(cid: int):
     if seer_target is not None:
         for uid, role in room["role_map"].items():
             if role == "占い師" and uid in room["alive"]:
-                seer_user = await werewolf_bot.fetch_user(uid)
-                target_role = room["role_map"].get(seer_target)
-                is_werewolf = target_role == "人狼"
-                result = "人狼" if is_werewolf else "村人陣営"
                 try:
+                    seer_user = await werewolf_bot.fetch_user(uid)
+                    target_role = room["role_map"].get(seer_target)
+                    is_werewolf = target_role == "人狼"
+                    result = "人狼" if is_werewolf else "村人陣営"
                     await seer_user.send(f"🔮 あなたが占った <@{seer_target}> は **{result}** でした。")
                 except discord.Forbidden:
                     await channel.send(f"⚠️ 占い師 <@{uid}> に結果を送信できませんでした。")
+                except Exception as e:
+                    await channel.send(f"⚠️ 占い師 <@{uid}> への結果送信中にエラーが発生しました: {str(e)}")
 
     # 霊媒結果を通知
-    last_executed = room.get("last_executed")
-    if last_executed:
-        for uid, role in room["role_map"].items():
-            if role == "霊媒師" and uid in room["alive"]:
-                medium_user = await werewolf_bot.fetch_user(uid)
-                executed_role = room["role_map"].get(last_executed)
-                try:
-                    await medium_user.send(f"👻 処刑された <@{last_executed}> は **{executed_role}** でした。")
-                except discord.Forbidden:
-                    await channel.send(f"⚠️ 霊媒師 <@{uid}> に結果を送信できませんでした。")
+    await process_medium_results(room, channel)
 
     # 次のフェーズへ
     room["phase"] = "day"
@@ -447,7 +440,11 @@ async def process_day_results(cid: int):
         return
 
     vote_map = room.get("votes", {})
-    target_id, count = get_vote_results(vote_map, room)
+    target_id, count, vote_details = get_vote_results(vote_map, room)
+    
+    # 投票結果を表示
+    if channel and vote_details:
+        await send_vote_results(channel, vote_details)
     
     if target_id is None:
         # 投票なし→ランダム吊り
@@ -559,28 +556,36 @@ async def wait_for_night_actions(cid: int):
 
     # タイムアウト処理
     if room["phase"] == "night":
-        channel = werewolf_bot.get_channel(cid)
-        await channel.send("⏰ 時間切れです。未投票はランダムに決定されます。")
-        
-        # 人狼の未投票をランダム決定（初日以外）
-        if not is_first_night and len(room["night_actions"]["werewolf_targets"]) < num_wolves:
-            alive_targets = [uid for uid in room["alive"] 
-                           if room["role_map"][uid] != "人狼"]
-            if alive_targets:
-                room["night_actions"]["werewolf_targets"].append(
-                    random.choice(alive_targets)
-                )
-        
-        # 占い師の未投票をランダム決定
-        if room["night_actions"]["seer_target"] is None:
-            for uid, role in room["role_map"].items():
-                if role == "占い師" and uid in room["alive"]:
-                    alive_targets = [tid for tid in room["alive"] if tid != uid]
-                    if alive_targets:
-                        room["night_actions"]["seer_target"] = random.choice(alive_targets)
-                    break
-        
-        await process_night_results(cid)
+        await handle_night_timeout(room, cid)
+
+async def handle_night_timeout(room: dict, cid: int):
+    """夜フェーズのタイムアウト処理"""
+    channel = werewolf_bot.get_channel(cid)
+    await channel.send("⏰ 時間切れです。未投票はランダムに決定されます。")
+    
+    is_first_night = room["day_count"] == 1
+    num_wolves = sum(1 for uid, role in room["role_map"].items() 
+                    if role == "人狼" and uid in room["alive"])
+
+    # 人狼の未投票をランダム決定（初日以外）
+    if not is_first_night and len(room["night_actions"]["werewolf_targets"]) < num_wolves:
+        alive_targets = [uid for uid in room["alive"] 
+                       if room["role_map"][uid] != "人狼"]
+        if alive_targets:
+            room["night_actions"]["werewolf_targets"].append(
+                random.choice(alive_targets)
+            )
+    
+    # 占い師の未投票をランダム決定
+    if room["night_actions"]["seer_target"] is None:
+        for uid, role in room["role_map"].items():
+            if role == "占い師" and uid in room["alive"]:
+                alive_targets = [tid for tid in room["alive"] if tid != uid]
+                if alive_targets:
+                    room["night_actions"]["seer_target"] = random.choice(alive_targets)
+                break
+    
+    await process_night_results(cid)
 
 # =============================
 # ==== 夜フェーズ用 View / Button クラス ====
@@ -760,7 +765,7 @@ class VoteView(discord.ui.View):
 class VoteButton(discord.ui.Button):
     def __init__(self, target_player: discord.User):
         super().__init__(
-            label=f"{target_player.display_name}",  # display_nameを使用
+            label=f"{target_player.display_name}",
             style=discord.ButtonStyle.danger,
             custom_id=str(target_player.id)
         )
@@ -800,10 +805,11 @@ class VoteButton(discord.ui.Button):
 
         except Exception as e:
             try:
+                error_msg = f"⚠️ 投票中にエラーが発生しました: {str(e)}"
                 if not interaction.response.is_done():
-                    await interaction.response.send_message(f"⚠️ 投票中にエラーが発生しました: {str(e)}", ephemeral=True)
+                    await interaction.response.send_message(error_msg, ephemeral=True)
                 else:
-                    await interaction.followup.send(f"⚠️ 投票中にエラーが発生しました: {str(e)}", ephemeral=True)
+                    await interaction.followup.send(error_msg, ephemeral=True)
             except:
                 channel = interaction.channel
                 if channel:
@@ -919,13 +925,13 @@ async def send_roles_and_start(cid: int):
     asyncio.create_task(wait_for_night_actions(cid))
 
 # === 投票処理の改善 ===
-async def get_vote_results(votes: dict, room: dict) -> tuple[int, int]:
+def get_vote_results(votes: dict, room: dict) -> tuple[int, int, list]:
     """
     投票結果から最多得票者とその得票数を返す。
     同数の場合はランダムに選択。
     """
     if not votes:
-        return None, 0
+        return None, 0, []
     
     # 投票結果を集計
     counter = Counter(votes.values())
@@ -940,14 +946,13 @@ async def get_vote_results(votes: dict, room: dict) -> tuple[int, int]:
         if voter and target:
             vote_details.append(f"{voter.display_name} → {target.display_name}")
     
-    # 投票結果をチャンネルに表示
-    channel = werewolf_bot.get_channel(room.get("channel_id"))
-    if channel:
-        vote_summary = "\n".join(vote_details)
-        await channel.send(f"📊 **投票結果**\n{vote_summary}")
-    
     chosen = random.choice(max_voted)
-    return chosen, max_votes
+    return chosen, max_votes, vote_details
+
+async def send_vote_results(channel: discord.TextChannel, vote_details: list):
+    """投票結果をチャンネルに表示"""
+    vote_summary = "\n".join(vote_details)
+    await channel.send(f"📊 **投票結果**\n{vote_summary}")
 
 async def send_dm_or_channel(user: discord.User, channel: discord.TextChannel, message: str, view: discord.ui.View = None) -> bool:
     """
@@ -1002,7 +1007,7 @@ async def process_night_results(cid: int):
         room["voted_players"] = set()
         room["attacked_by_wolf"] = set()
         room["used_seer"] = set()
-        room["used_knight"] = set()  # 騎士のアクション履歴もリセット
+        room["used_knight"] = set()
 
     # ... 既存のコード ...
 
