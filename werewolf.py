@@ -277,24 +277,24 @@ class JoinView(discord.ui.View):
     @discord.ui.button(label="参加する", style=discord.ButtonStyle.success)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-        cid = self.channel_id
-        room = werewolf_rooms.get(cid)
-        if not room:
-            await interaction.response.send_message("❌ この部屋は存在しません。", ephemeral=True)
-            return
+            cid = self.channel_id
+            room = werewolf_rooms.get(cid)
+            if not room:
+                await interaction.response.send_message("❌ この部屋は存在しません。", ephemeral=True)
+                return
 
-        # 参加済みチェック
-        if interaction.user.id in [u.id for u in room["players"]]:
-            await interaction.response.send_message("⚠️ すでに参加しています。", ephemeral=True)
-            return
+            # 参加済みチェック
+            if interaction.user.id in [u.id for u in room["players"]]:
+                await interaction.response.send_message("⚠️ すでに参加しています。", ephemeral=True)
+                return
 
-        # 定員チェック
-        if len(room["players"]) >= len(room["role_set"]):
-            await interaction.response.send_message("⚠️ 定員に達しています。", ephemeral=True)
-            return
+            # 定員チェック
+            if len(room["players"]) >= len(room["role_set"]):
+                await interaction.response.send_message("⚠️ 定員に達しています。", ephemeral=True)
+                return
 
-        # 参加者リストに追加
-        room["players"].append(interaction.user)
+            # 参加者リストに追加
+            room["players"].append(interaction.user)
             remaining = len(room["role_set"]) - len(room["players"])
             
             try:
@@ -318,10 +318,10 @@ class JoinView(discord.ui.View):
                     ephemeral=False
                 )
 
-        # 参加者数が役職数と揃ったら、役職配布 → 夜フェーズへ
-        if len(room["players"]) == len(room["role_set"]):
-            await asyncio.sleep(1)
-            await send_roles_and_start(cid)
+            # 参加者数が役職数と揃ったら、役職配布 → 夜フェーズへ
+            if len(room["players"]) == len(room["role_set"]):
+                await asyncio.sleep(1)
+                await send_roles_and_start(cid)
 
         except Exception as e:
             # エラーが発生した場合のフォールバック処理
@@ -421,7 +421,7 @@ async def process_night_results(cid: int):
                 executed_role = room["role_map"].get(last_executed)
                 try:
                     await medium_user.send(f"👻 処刑された <@{last_executed}> は **{executed_role}** でした。")
-            except discord.Forbidden:
+                except discord.Forbidden:
                     await channel.send(f"⚠️ 霊媒師 <@{uid}> に結果を送信できませんでした。")
 
     # 次のフェーズへ
@@ -465,7 +465,7 @@ async def process_day_results(cid: int):
             if len(max_voted) > 1:
                 await channel.send(f"🔨 同数得票のため、ランダムで <@{target_id}> が選ばれ、{count} 票で吊られました。")
             else:
-            await channel.send(f"🔨 投票の結果、<@{target_id}> に {count} 票が入り、吊られました。")
+                await channel.send(f"🔨 投票の結果、<@{target_id}> に {count} 票が入り、吊られました。")
 
     # 勝敗判定
     winner, message = check_win_condition(room)
@@ -552,7 +552,7 @@ async def wait_for_night_actions(cid: int):
             not any(uid for uid, role in room["role_map"].items()  # または生存占い師なし
                    if role == "占い師" and uid in room["alive"])
         ):
-    await process_night_results(cid)
+            await process_night_results(cid)
             return
         
         await asyncio.sleep(1)
@@ -770,9 +770,9 @@ class VoteButton(discord.ui.Button):
         try:
             cid = interaction.channel.id
             room = werewolf_rooms.get(cid)
-        if not room or room["phase"] != "day":
-            await interaction.response.send_message("⚠️ 今は投票フェーズではありません。", ephemeral=True)
-            return
+            if not room or room["phase"] != "day":
+                await interaction.response.send_message("⚠️ 今は投票フェーズではありません。", ephemeral=True)
+                return
 
             voter_id = interaction.user.id
             if voter_id not in room["alive"]:
