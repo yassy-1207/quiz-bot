@@ -367,6 +367,12 @@ async def process_night_results(cid: int):
     if not room:
         return
 
+    # アクション履歴をリセット
+    room["voted_players"] = set()
+    room["attacked_by_wolf"] = set()
+    room["used_seer"] = set()
+    room["used_knight"] = set()  # 騎士のアクション履歴もリセット
+
     # 初日の夜は最低待機時間を設ける
     if room["day_count"] == 1:
         await asyncio.sleep(10)  # 10秒の最低待機時間
@@ -441,7 +447,7 @@ async def process_day_results(cid: int):
         return
 
     vote_map = room.get("votes", {})
-    target_id, count = get_vote_results(vote_map)
+    target_id, count = get_vote_results(vote_map, room)
     
     if target_id is None:
         # 投票なし→ランダム吊り
@@ -480,36 +486,7 @@ async def process_day_results(cid: int):
     }
     await channel.send("🌙 夜になります。各役職は DM を確認してください。")
 
-    for user in room["players"]:
-        uid = user.id
-        if uid not in room["alive"]:
-            continue
-            
-        role = room["role_map"][uid]
-        if role == "人狼":
-            view = WolfNightView(cid, uid)
-            success = await send_dm_or_channel(
-                user, channel,
-                "🌙 【夜フェーズ】 襲撃する相手を選んでください：",
-                view
-            )
-        elif role == "占い師":
-            view = SeerNightView(cid, uid)
-            success = await send_dm_or_channel(
-                user, channel,
-                "🌙 【夜フェーズ】 占う相手を選んでください：",
-                view
-            )
-        elif role == "狂人":
-            # 狂人には特別な情報を与えない
-            await user.send("🎭 あなたは狂人です。人狼陣営の勝利のために行動してください。")
-        else:
-            success = await send_dm_or_channel(
-                user, channel,
-                "🌙 【夜フェーズ】 あなたは村人です。お休みしてください。"
-            )
-
-    asyncio.create_task(wait_for_night_actions(cid))
+    await send_night_actions(cid)
 
 async def show_game_summary(cid: int):
     """
@@ -617,16 +594,25 @@ class WolfNightView(discord.ui.View):
         room = werewolf_rooms.get(cid)
         if not room:
             return
+
+        # 襲撃済みプレイヤーのセットを初期化
+        if "attacked_by_wolf" not in room:
+            room["attacked_by_wolf"] = set()
+
         for target_id in room["alive"]:
             if target_id != uid:
-                self.add_item(WolfKillButton(cid, target_id))
+                target_user = werewolf_bot.get_user(target_id)
+                if target_user:
+                    self.add_item(WolfKillButton(cid, target_user))
 
 class WolfKillButton(discord.ui.Button):
-    def __init__(self, cid: int, target_id: int):
-        label = f"襲撃: <@{target_id}>"
-        super().__init__(label=label, style=discord.ButtonStyle.danger)
+    def __init__(self, cid: int, target_user: discord.User):
+        super().__init__(
+            label=f"襲撃: {target_user.display_name}",
+            style=discord.ButtonStyle.danger
+        )
         self.cid = cid
-        self.target_id = target_id
+        self.target_user = target_user
 
     async def callback(self, interaction: discord.Interaction):
         uid = interaction.user.id
@@ -637,8 +623,15 @@ class WolfKillButton(discord.ui.Button):
         if room["role_map"].get(uid) != "人狼":
             await interaction.response.send_message("⚠️ あなたには襲撃権限がありません。", ephemeral=True)
             return
-        room["night_actions"]["werewolf_targets"].append(self.target_id)
-        await interaction.response.send_message(f"✅ <@{self.target_id}> を襲撃対象に選択しました。", ephemeral=True)
+
+        # 襲撃済みチェック
+        if uid in room.get("attacked_by_wolf", set()):
+            await interaction.response.send_message("⚠️ あなたは既に襲撃済みです。", ephemeral=True)
+            return
+
+        room["night_actions"]["werewolf_targets"].append(self.target_user.id)
+        room.setdefault("attacked_by_wolf", set()).add(uid)
+        await interaction.response.send_message(f"✅ {self.target_user.display_name} を襲撃対象に選択しました。", ephemeral=True)
         self.stop()
 
 class SeerNightView(discord.ui.View):
@@ -649,16 +642,25 @@ class SeerNightView(discord.ui.View):
         room = werewolf_rooms.get(cid)
         if not room:
             return
+
+        # 占い済みプレイヤーのセットを初期化
+        if "used_seer" not in room:
+            room["used_seer"] = set()
+
         for target_id in room["alive"]:
             if target_id != uid:
-                self.add_item(SeerCheckButton(cid, target_id))
+                target_user = werewolf_bot.get_user(target_id)
+                if target_user:
+                    self.add_item(SeerCheckButton(cid, target_user))
 
 class SeerCheckButton(discord.ui.Button):
-    def __init__(self, cid: int, target_id: int):
-        label = f"占う: <@{target_id}>"
-        super().__init__(label=label, style=discord.ButtonStyle.primary)
+    def __init__(self, cid: int, target_user: discord.User):
+        super().__init__(
+            label=f"占う: {target_user.display_name}",
+            style=discord.ButtonStyle.primary
+        )
         self.cid = cid
-        self.target_id = target_id
+        self.target_user = target_user
 
     async def callback(self, interaction: discord.Interaction):
         uid = interaction.user.id
@@ -669,13 +671,68 @@ class SeerCheckButton(discord.ui.Button):
         if room["role_map"].get(uid) != "占い師":
             await interaction.response.send_message("⚠️ あなたには占い権限がありません。", ephemeral=True)
             return
-        room["night_actions"]["seer_target"] = self.target_id
+
+        # 占い済みチェック
+        if uid in room.get("used_seer", set()):
+            await interaction.response.send_message("⚠️ あなたは既に占い済みです。", ephemeral=True)
+            return
+
+        room["night_actions"]["seer_target"] = self.target_user.id
+        room.setdefault("used_seer", set()).add(uid)
         
         # 占い結果をすぐに通知
-        target_role = room["role_map"][self.target_id]
+        target_role = room["role_map"][self.target_user.id]
         is_werewolf = target_role == "人狼"
         result = "人狼" if is_werewolf else "村人陣営"
-        await interaction.response.send_message(f"🔮 <@{self.target_id}> を占いました。\n結果：**{result}**", ephemeral=True)
+        await interaction.response.send_message(f"🔮 {self.target_user.display_name} を占いました。\n結果：**{result}**", ephemeral=True)
+        self.stop()
+
+class KnightNightView(discord.ui.View):
+    def __init__(self, cid: int, uid: int):
+        super().__init__(timeout=60)
+        self.cid = cid
+        self.user_id = uid
+        room = werewolf_rooms.get(cid)
+        if not room:
+            return
+
+        # 護衛済みプレイヤーのセットを初期化
+        if "used_knight" not in room:
+            room["used_knight"] = set()
+
+        for target_id in room["alive"]:
+            if target_id != uid:
+                target_user = werewolf_bot.get_user(target_id)
+                if target_user:
+                    self.add_item(KnightProtectButton(cid, target_user))
+
+class KnightProtectButton(discord.ui.Button):
+    def __init__(self, cid: int, target_user: discord.User):
+        super().__init__(
+            label=f"護衛: {target_user.display_name}",
+            style=discord.ButtonStyle.success
+        )
+        self.cid = cid
+        self.target_user = target_user
+
+    async def callback(self, interaction: discord.Interaction):
+        uid = interaction.user.id
+        room = werewolf_rooms.get(self.cid)
+        if not room:
+            await interaction.response.send_message("❌ この部屋は存在しません。", ephemeral=True)
+            return
+        if room["role_map"].get(uid) != "騎士":
+            await interaction.response.send_message("⚠️ あなたには護衛権限がありません。", ephemeral=True)
+            return
+
+        # 護衛済みチェック
+        if uid in room.get("used_knight", set()):
+            await interaction.response.send_message("⚠️ あなたは既に護衛済みです。", ephemeral=True)
+            return
+
+        room["night_actions"]["knight_target"] = self.target_user.id
+        room.setdefault("used_knight", set()).add(uid)
+        await interaction.response.send_message(f"🛡️ {self.target_user.display_name} を護衛対象に選択しました。", ephemeral=True)
         self.stop()
 
 # =============================
@@ -690,6 +747,10 @@ class VoteView(discord.ui.View):
         if not room:
             return
         
+        # 投票済みプレイヤーのセットを初期化
+        if "voted_players" not in room:
+            room["voted_players"] = set()
+        
         # 生存者一覧からボタンを作成
         for player in room["players"]:
             if player.id in room["alive"]:
@@ -698,7 +759,6 @@ class VoteView(discord.ui.View):
 
 class VoteButton(discord.ui.Button):
     def __init__(self, target_player: discord.User):
-        # ユーザー名を表示するようにラベルを設定
         super().__init__(
             label=f"{target_player.display_name}",  # display_nameを使用
             style=discord.ButtonStyle.danger,
@@ -719,8 +779,14 @@ class VoteButton(discord.ui.Button):
                 await interaction.response.send_message("⚠️ あなたは投票できません。", ephemeral=True)
                 return
 
+            # 投票済みチェック
+            if voter_id in room.get("voted_players", set()):
+                await interaction.response.send_message("⚠️ あなたは既に投票済みです。", ephemeral=True)
+                return
+
             # 投票を記録
             room.setdefault("votes", {})[voter_id] = int(self.custom_id)
+            room.setdefault("voted_players", set()).add(voter_id)
             
             # 投票完了メッセージ
             await interaction.response.send_message(
@@ -731,6 +797,7 @@ class VoteButton(discord.ui.Button):
             # 全員が投票したかチェック
             if len(room["votes"]) == len(room["alive"]):
                 await process_day_results(cid)
+
         except Exception as e:
             try:
                 if not interaction.response.is_done():
@@ -756,24 +823,7 @@ class RoleSetButton(discord.ui.Button):
         cid = interaction.channel.id
 
         # 部屋オブジェクトを初期化
-        werewolf_rooms[cid] = {
-            "role_set": self.role_set,
-            "players": [],
-            "role_map": {},
-            "alive": set(),
-            "dead": set(),
-            "phase": None,
-            "day_count": 1,
-            "night_actions": {
-                "werewolf_targets": [],
-                "seer_target": None,
-                "knight_target": None,
-                "medium_result": None,
-                "madman_info": None
-            },
-            "votes": {},
-            "last_executed": None
-        }
+        werewolf_rooms[cid] = initialize_room(cid, self.role_set)
 
         # どのセットが選ばれたかをチャンネルに表示
         chosen_text = "・".join(self.role_set)
@@ -869,7 +919,7 @@ async def send_roles_and_start(cid: int):
     asyncio.create_task(wait_for_night_actions(cid))
 
 # === 投票処理の改善 ===
-def get_vote_results(votes: dict) -> tuple[int, int]:
+def get_vote_results(votes: dict, room: dict) -> tuple[int, int]:
     """
     投票結果から最多得票者とその得票数を返す。
     同数の場合はランダムに選択。
@@ -877,9 +927,25 @@ def get_vote_results(votes: dict) -> tuple[int, int]:
     if not votes:
         return None, 0
     
+    # 投票結果を集計
     counter = Counter(votes.values())
     max_votes = max(counter.values())
     max_voted = [uid for uid, count in counter.items() if count == max_votes]
+    
+    # 投票状況の詳細を生成
+    vote_details = []
+    for voter_id, target_id in votes.items():
+        voter = werewolf_bot.get_user(voter_id)
+        target = werewolf_bot.get_user(target_id)
+        if voter and target:
+            vote_details.append(f"{voter.display_name} → {target.display_name}")
+    
+    # 投票結果をチャンネルに表示
+    channel = werewolf_bot.get_channel(room.get("channel_id"))
+    if channel:
+        vote_summary = "\n".join(vote_details)
+        await channel.send(f"📊 **投票結果**\n{vote_summary}")
+    
     chosen = random.choice(max_voted)
     return chosen, max_votes
 
@@ -925,3 +991,77 @@ class PhaseSkipView(discord.ui.View):
             await process_day_results(self.cid)
 
         await interaction.response.send_message("⏩ フェーズをスキップしました。", ephemeral=False)
+
+# =============================
+# ==== フェーズ変更時のリセット処理を更新 ====
+# =============================
+async def process_night_results(cid: int):
+    room = werewolf_rooms.get(cid)
+    if room:
+        # アクション履歴をリセット
+        room["voted_players"] = set()
+        room["attacked_by_wolf"] = set()
+        room["used_seer"] = set()
+        room["used_knight"] = set()  # 騎士のアクション履歴もリセット
+
+    # ... 既存のコード ...
+
+# =============================
+# ==== 夜フェーズでの役職アクション通知を改善 ====
+# =============================
+async def send_night_actions(cid: int):
+    room = werewolf_rooms.get(cid)
+    channel = werewolf_bot.get_channel(cid)
+    if not room:
+        return
+
+    for user in room["players"]:
+        uid = user.id
+        if uid not in room["alive"]:
+            continue
+
+        role = room["role_map"][uid]
+        if role == "人狼":
+            if room["day_count"] == 1:
+                await send_dm_or_channel(user, channel, "🌙 初日の夜は襲撃できません。")
+            else:
+                view = WolfNightView(cid, uid)
+                await send_dm_or_channel(user, channel, "🌙 襲撃する相手を選んでください：", view)
+        elif role == "占い師":
+            view = SeerNightView(cid, uid)
+            await send_dm_or_channel(user, channel, "🌙 占う相手を選んでください：", view)
+        elif role == "騎士":
+            view = KnightNightView(cid, uid)
+            await send_dm_or_channel(user, channel, "🌙 護衛する相手を選んでください：", view)
+        elif role == "狂人":
+            await send_dm_or_channel(user, channel, "🌙 あなたは狂人です。人狼陣営の勝利のために行動してください。")
+        else:
+            await send_dm_or_channel(user, channel, "🌙 あなたは特別な行動はできません。")
+
+# =============================
+# ==== 部屋の初期化処理を改善 ====
+# =============================
+def initialize_room(cid: int, role_set: list):
+    """部屋の初期化処理を共通化"""
+    return {
+        "role_set": role_set,
+        "players": [],
+        "role_map": {},
+        "alive": set(),
+        "dead": set(),
+        "phase": None,
+        "day_count": 1,
+        "night_actions": {
+            "werewolf_targets": [],
+            "seer_target": None,
+            "knight_target": None,
+            "medium_result": None
+        },
+        "votes": {},
+        "voted_players": set(),
+        "attacked_by_wolf": set(),
+        "used_seer": set(),
+        "used_knight": set(),
+        "last_executed": None,
+        "channel_id": cid
+    }
