@@ -169,9 +169,9 @@ def setup_werewolf(bot: commands.Bot):
             await interaction.response.send_message("⚠️ あなたは既に死亡しています。", ephemeral=True)
             return
 
-        # 投票用のボタンを表示
+        # 投票用のボタンを全員に表示
         view = VoteView(cid)
-        await interaction.response.send_message("👇 処刑する人を選んでください：", view=view, ephemeral=True)
+        await interaction.response.send_message("👇 全員投票してください：", view=view, ephemeral=False)
 
     @bot.tree.command(name="じんろう中断", description="進行中の人狼ゲームを中断します")
     async def cancel_game(interaction: discord.Interaction):
@@ -392,7 +392,7 @@ async def process_night_results(cid: int):
     else:
         await channel.send("🌅 朝になりました。昨夜の襲撃は失敗したようです。")
 
-    # 占い結果を通知
+    # 占い結果を通知（夜のうちに通知するように変更）
     seer_target = room["night_actions"]["seer_target"]
     if seer_target is not None:
         for uid, role in room["role_map"].items():
@@ -501,14 +501,8 @@ async def process_day_results(cid: int):
                 view
             )
         elif role == "狂人":
-            # 狂人に人狼を教える
-            wolves = [uid for uid, r in room["role_map"].items() if r == "人狼"]
-            wolf_info = "、".join(f"<@{wid}>" for wid in wolves)
-            success = await send_dm_or_channel(
-                user, channel,
-                f"🌙 【夜フェーズ】 あなたは狂人です。人狼は {wolf_info} です。"
-            )
-            room["night_actions"]["madman_info"] = "informed"
+            # 狂人には特別な情報を与えない
+            await user.send("🎭 あなたは狂人です。人狼陣営の勝利のために行動してください。")
         else:
             success = await send_dm_or_channel(
                 user, channel,
@@ -676,7 +670,12 @@ class SeerCheckButton(discord.ui.Button):
             await interaction.response.send_message("⚠️ あなたには占い権限がありません。", ephemeral=True)
             return
         room["night_actions"]["seer_target"] = self.target_id
-        await interaction.response.send_message(f"🔮 <@{self.target_id}> を占い対象に選択しました。", ephemeral=True)
+        
+        # 占い結果をすぐに通知
+        target_role = room["role_map"][self.target_id]
+        is_werewolf = target_role == "人狼"
+        result = "人狼" if is_werewolf else "村人陣営"
+        await interaction.response.send_message(f"🔮 <@{self.target_id}> を占いました。\n結果：**{result}**", ephemeral=True)
         self.stop()
 
 # =============================
@@ -685,30 +684,63 @@ class SeerCheckButton(discord.ui.Button):
 
 class VoteView(discord.ui.View):
     def __init__(self, cid: int):
-        super().__init__(timeout=60)
+        super().__init__(timeout=60)  # 1分でタイムアウト
         self.cid = cid
         room = werewolf_rooms.get(cid)
         if not room:
             return
-        for target_id in room["alive"]:
-            self.add_item(VoteButton(cid, target_id))
+        
+        # 生存者一覧からボタンを作成
+        for player in room["players"]:
+            if player.id in room["alive"]:
+                # 自分以外の生存者のみボタンを作成
+                self.add_item(VoteButton(player))
 
 class VoteButton(discord.ui.Button):
-    def __init__(self, cid: int, target_id: int):
-        label = f"投票: <@{target_id}>"
-        super().__init__(label=label, style=discord.ButtonStyle.danger)
-        self.cid = cid
-        self.target_id = target_id
+    def __init__(self, target_player: discord.User):
+        # ユーザー名を表示するようにラベルを設定
+        super().__init__(
+            label=f"{target_player.display_name}",  # display_nameを使用
+            style=discord.ButtonStyle.danger,
+            custom_id=str(target_player.id)
+        )
+        self.target_player = target_player
 
     async def callback(self, interaction: discord.Interaction):
-        voter_id = interaction.user.id
-        room = werewolf_rooms.get(self.cid)
-        if not room or room["phase"] != "day":
-            await interaction.response.send_message("⚠️ 今は投票フェーズではありません。", ephemeral=True)
-            return
-        room.setdefault("votes", {})[voter_id] = self.target_id
-        await interaction.response.send_message(f"✅ 投票完了: <@{self.target_id}> に投票しました。", ephemeral=True)
-        self.stop()
+        try:
+            cid = interaction.channel.id
+            room = werewolf_rooms.get(cid)
+            if not room or room["phase"] != "day":
+                await interaction.response.send_message("⚠️ 今は投票フェーズではありません。", ephemeral=True)
+                return
+
+            voter_id = interaction.user.id
+            if voter_id not in room["alive"]:
+                await interaction.response.send_message("⚠️ あなたは投票できません。", ephemeral=True)
+                return
+
+            # 投票を記録
+            room.setdefault("votes", {})[voter_id] = int(self.custom_id)
+            
+            # 投票完了メッセージ
+            await interaction.response.send_message(
+                f"✅ {self.target_player.display_name} に投票しました。",
+                ephemeral=True
+            )
+
+            # 全員が投票したかチェック
+            if len(room["votes"]) == len(room["alive"]):
+                await process_day_results(cid)
+        except Exception as e:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f"⚠️ 投票中にエラーが発生しました: {str(e)}", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"⚠️ 投票中にエラーが発生しました: {str(e)}", ephemeral=True)
+            except:
+                channel = interaction.channel
+                if channel:
+                    await channel.send(f"⚠️ {interaction.user.mention} の投票処理中にエラーが発生しました。")
 
 # =============================
 # ==== メインコマンド・役職選択 View ====
@@ -818,7 +850,13 @@ async def send_roles_and_start(cid: int):
             if possible_targets:
                 target = random.choice(possible_targets)
                 room["night_actions"]["seer_target"] = target
-                await user.send(f"🔮 初日の占い対象は <@{target}> にランダムで決定されました。")
+                target_role = room["role_map"][target]
+                is_werewolf = target_role == "人狼"
+                result = "人狼" if is_werewolf else "村人陣営"
+                await user.send(f"🔮 初日の占い対象は <@{target}> にランダムで決定されました。\n結果：**{result}**")
+        elif role == "狂人":
+            # 狂人には特別な情報を与えない
+            await user.send("🎭 あなたは狂人です。人狼陣営の勝利のために行動してください。")
 
     # 全体通知
     await channel.send("🌙 初日の夜です。各役職は DM を確認してください。")
