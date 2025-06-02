@@ -92,6 +92,11 @@ def setup_tankbattle(bot: commands.Bot):
 
             # ターンループ
             while all(p.hp > 0 for p in players):
+                # 中断確認
+                if not room.get('started', False):
+                    await channel.send("🛑 ゲームが中断されました。")
+                    return
+
                 # 各プレイヤーへ結果と選択DM
                 for p in players:
                     opponent = players[1] if p is players[0] else players[0]
@@ -140,6 +145,24 @@ def setup_tankbattle(bot: commands.Bot):
         finally:
             if room_id in rooms:
                 del rooms[room_id]
+
+    @bot.tree.command(name='戦車中断', description='進行中の戦車バトルを中断します')
+    async def cancel_game(interaction: discord.Interaction):
+        # 進行中のゲームを探す
+        channel_rooms = [room for room in rooms.values() if room['channel'].id == interaction.channel.id]
+        if not channel_rooms:
+            await interaction.response.send_message("⚠️ このチャンネルで進行中のゲームはありません。", ephemeral=True)
+            return
+
+        room = channel_rooms[0]
+        # 参加者かどうかチェック
+        if not any(p.user.id == interaction.user.id for p in room['players']):
+            await interaction.response.send_message("⚠️ このゲームの参加者ではありません。", ephemeral=True)
+            return
+
+        # ゲームを中断
+        room['started'] = False
+        await interaction.response.send_message("🛑 ゲームを中断しました。")
 
     class JoinView(discord.ui.View):
         def __init__(self, room_id: str):
