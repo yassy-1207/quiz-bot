@@ -225,6 +225,6 @@ async def on_ready():
     print(f"{bot.user} は起動しました")
 
 # もしこのファイル単体でテストしたい場合は以下をアンコメント
-# load_dotenv()
-# token = os.getenv("DISCORD_TOKEN")
-# bot.run(token)
+load_dotenv()
+token = os.getenv("DISCORD_TOKEN")
+bot.run(token)
