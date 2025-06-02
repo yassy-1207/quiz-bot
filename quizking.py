@@ -40,6 +40,9 @@ tmp_settings = {}       # {channel_id: {"category": str, "difficulty": str, "cou
 MAX_COUNT = 50
 DEFAULT_TIMEOUT = 15  # 秒
 
+# グローバル変数の定義
+quiz_bot = None
+
 def get_today_key():
     return datetime.now().strftime("%Y-%m-%d")
 
@@ -84,26 +87,32 @@ async def run_quiz(channel: discord.TextChannel, category: str, difficulty: str,
         # 問題を送信
         await channel.send(f"**第{i}問/{count}問**\n{q['question']}\n⏰ {DEFAULT_TIMEOUT}秒で回答")
 
+        def check(m):
+            return (
+                m.channel.id == cid
+                and m.author.id in participants
+                and not m.author.bot
+            )
+
+        answered = False
         try:
-            while True:  # 正解が出るまでループ
-                msg = await channel.guild.bot.wait_for(
-                    'message',
-                    timeout=DEFAULT_TIMEOUT,
-                    check=lambda m: (
-                        m.channel.id == cid
-                        and m.author.id in participants
-                        and not m.author.bot
-                    )
-                )
-                
-                # 回答チェック
-                if msg.content.strip() == q['answer']:
-                    scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
-                    await channel.send(f"🎉 {msg.author.mention} 正解！")
-                    break  # 正解が出たのでループを抜ける
-                
-        except asyncio.TimeoutError:
-            await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
+            while not answered and tmp_ready.get(cid):
+                try:
+                    msg = await quiz_bot.wait_for('message', timeout=DEFAULT_TIMEOUT, check=check)
+                    if msg.content.strip() == q['answer']:
+                        scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
+                        await channel.send(f"🎉 {msg.author.mention} 正解！")
+                        answered = True
+                        # 少し待ってから次の問題へ
+                        await asyncio.sleep(2)
+                except asyncio.TimeoutError:
+                    await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
+                    # 少し待ってから次の問題へ
+                    await asyncio.sleep(2)
+                    break
+        except Exception as e:
+            print(f"Error in quiz: {e}")
+            continue
 
     # 結果発表＆クリーンアップ
     tmp_sessions.pop(cid, None)
@@ -171,7 +180,6 @@ class QuizSetupView(discord.ui.View):
 # setup_quizking 関数
 # ======================================
 def setup_quizking(bot: commands.Bot):
-    # グローバル変数としてbotを保存
     global quiz_bot
     quiz_bot = bot
 
@@ -206,26 +214,32 @@ def setup_quizking(bot: commands.Bot):
             # 問題を送信
             await channel.send(f"**第{i}問/{count}問**\n{q['question']}\n⏰ {DEFAULT_TIMEOUT}秒で回答")
 
+            def check(m):
+                return (
+                    m.channel.id == cid
+                    and m.author.id in participants
+                    and not m.author.bot
+                )
+
+            answered = False
             try:
-                while True:  # 正解が出るまでループ
-                    msg = await quiz_bot.wait_for(
-                        'message',
-                        timeout=DEFAULT_TIMEOUT,
-                        check=lambda m: (
-                            m.channel.id == cid
-                            and m.author.id in participants
-                            and not m.author.bot
-                        )
-                    )
-                    
-                    # 回答チェック
-                    if msg.content.strip() == q['answer']:
-                        scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
-                        await channel.send(f"🎉 {msg.author.mention} 正解！")
-                        break  # 正解が出たのでループを抜ける
-                    
-            except asyncio.TimeoutError:
-                await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
+                while not answered and tmp_ready.get(cid):
+                    try:
+                        msg = await quiz_bot.wait_for('message', timeout=DEFAULT_TIMEOUT, check=check)
+                        if msg.content.strip() == q['answer']:
+                            scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
+                            await channel.send(f"🎉 {msg.author.mention} 正解！")
+                            answered = True
+                            # 少し待ってから次の問題へ
+                            await asyncio.sleep(2)
+                    except asyncio.TimeoutError:
+                        await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
+                        # 少し待ってから次の問題へ
+                        await asyncio.sleep(2)
+                        break
+            except Exception as e:
+                print(f"Error in quiz: {e}")
+                continue
 
         # 結果発表＆クリーンアップ
         tmp_sessions.pop(cid, None)
@@ -237,7 +251,7 @@ def setup_quizking(bot: commands.Bot):
             text = "\n".join([f"<@{uid}>: {pts}点" for uid, pts in sorted_list])
             await channel.send(f"🏁 このセッションの結果：\n{text}")
         else:
-            await channel.send("😢 正解者なしでした。")
+            await channel.send("�� 正解者なしでした。")
 
     # スラッシュコマンド /クイズ大会
     @bot.tree.command(name="クイズ大会", description="カテゴリ・難易度・問題数を指定してクイズを準備")
