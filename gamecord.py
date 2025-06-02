@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands
+from discord import app_commands
 
 # === 時間制限設定 ===
 now = datetime.utcnow() + timedelta(hours=9)
@@ -19,7 +20,16 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.presences = True
-bot = commands.Bot(command_prefix="/", intents=intents)
+
+class GameCordBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="/", intents=intents)
+        
+    async def setup_hook(self):
+        await self.tree.sync()
+        print("Command tree synced")
+
+bot = GameCordBot()
 
 # === 環境変数読み込み ===
 load_dotenv()
