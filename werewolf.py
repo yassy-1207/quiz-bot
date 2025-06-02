@@ -375,7 +375,7 @@ async def process_night_results(cid: int):
 
     # 初日の夜は最低待機時間を設ける
     if room["day_count"] == 1:
-        await asyncio.sleep(10)  # 10秒の最低待機時間
+        await asyncio.sleep(1)  # 初日は1秒だけ待機
 
     # 騎士の護衛を処理
     protected_id = room["night_actions"].get("knight_target")
@@ -392,30 +392,14 @@ async def process_night_results(cid: int):
             actually_killed.add(victim_id)
 
     # 朝の通知
-    if actually_killed:
-        killed_mentions = "、".join(f"<@{uid}>" for uid in actually_killed)
-        await channel.send(f"🌅 朝になりました。昨夜、{killed_mentions} が襲撃されました。")
+    if room["day_count"] == 1:
+        await channel.send("🌅 初日の朝になりました。昨夜は襲撃がありませんでした。")
     else:
-        await channel.send("🌅 朝になりました。昨夜の襲撃は失敗したようです。")
-
-    # 占い結果を通知（夜のうちに通知するように変更）
-    seer_target = room["night_actions"]["seer_target"]
-    if seer_target is not None:
-        for uid, role in room["role_map"].items():
-            if role == "占い師" and uid in room["alive"]:
-                try:
-                    seer_user = await werewolf_bot.fetch_user(uid)
-                    target_role = room["role_map"].get(seer_target)
-                    is_werewolf = target_role == "人狼"
-                    result = "人狼" if is_werewolf else "村人陣営"
-                    await seer_user.send(f"🔮 あなたが占った <@{seer_target}> は **{result}** でした。")
-                except discord.Forbidden:
-                    await channel.send(f"⚠️ 占い師 <@{uid}> に結果を送信できませんでした。")
-                except Exception as e:
-                    await channel.send(f"⚠️ 占い師 <@{uid}> への結果送信中にエラーが発生しました: {str(e)}")
-
-    # 霊媒結果を通知
-    await process_medium_results(room, channel)
+        if actually_killed:
+            killed_mentions = "、".join(f"{werewolf_bot.get_user(uid).display_name}" for uid in actually_killed)
+            await channel.send(f"🌅 朝になりました。昨夜、{killed_mentions} が襲撃されました。")
+        else:
+            await channel.send("🌅 朝になりました。昨夜の襲撃は失敗したようです。")
 
     # 次のフェーズへ
     room["phase"] = "day"
@@ -941,7 +925,7 @@ async def send_roles_and_start(cid: int):
             wolves = [uid for uid, r in room["role_map"].items() if r == "人狼"]
             other_wolves = [wid for wid in wolves if wid != uid]
             if other_wolves:
-                wolf_info = "、".join(f"<@{wid}>" for wid in other_wolves)
+                wolf_info = "、".join(f"{werewolf_bot.get_user(wid).display_name}" for wid in other_wolves)
                 await user.send(f"🐺 仲間の人狼は {wolf_info} です。")
             # 初日は襲撃なしを通知
             await user.send("🌙 初日の夜は襲撃できません。")
@@ -954,10 +938,8 @@ async def send_roles_and_start(cid: int):
                 target_role = room["role_map"][target]
                 is_werewolf = target_role == "人狼"
                 result = "人狼" if is_werewolf else "村人陣営"
-                await user.send(f"🔮 初日の占い対象は <@{target}> にランダムで決定されました。\n結果：**{result}**")
-        elif role == "狂人":
-            # 狂人には特別な情報を与えない
-            await user.send("🎭 あなたは狂人です。人狼陣営の勝利のために行動してください。")
+                target_name = werewolf_bot.get_user(target).display_name
+                await user.send(f"🔮 初日の占い対象は {target_name} にランダムで決定されました。\n結果：**{result}**")
 
     # 全体通知
     await channel.send("🌙 初日の夜です。各役職は DM を確認してください。")
@@ -1035,26 +1017,25 @@ class PhaseSkipView(discord.ui.View):
             await interaction.response.send_message("⚠️ このゲームの参加者ではありません。", ephemeral=True)
             return
 
-        if room["phase"] == "night":
-            await process_night_results(self.cid)
-        elif room["phase"] == "day":
-            await process_day_results(self.cid)
+        # ボタンを無効化して再クリックを防止
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
 
-        await interaction.response.send_message("⏩ フェーズをスキップしました。", ephemeral=False)
+        try:
+            if room["phase"] == "night":
+                # 初日の夜は特別処理
+                if room["day_count"] == 1:
+                    # 初日の夜は襲撃なしで朝に移行
+                    room["night_actions"]["werewolf_targets"] = []
+                    await process_night_results(self.cid)
+                else:
+                    await process_night_results(self.cid)
+            elif room["phase"] == "day":
+                await process_day_results(self.cid)
 
-# =============================
-# ==== フェーズ変更時のリセット処理を更新 ====
-# =============================
-async def process_night_results(cid: int):
-    room = werewolf_rooms.get(cid)
-    if room:
-        # アクション履歴をリセット
-        room["voted_players"] = set()
-        room["attacked_by_wolf"] = set()
-        room["used_seer"] = set()
-        room["used_knight"] = set()
-
-    # ... 既存のコード ...
+            await interaction.followup.send("⏩ フェーズをスキップしました。", ephemeral=False)
+        except Exception as e:
+            await interaction.followup.send(f"⚠️ エラーが発生しました: {str(e)}", ephemeral=True)
 
 # =============================
 # ==== 夜フェーズでの役職アクション通知を改善 ====
