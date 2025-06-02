@@ -190,20 +190,34 @@ async def wait_for_choice(player: Player):
 
 # 同時解決ロジック
 def resolve_turn(p1: Player, p2: Player):
-    def damage(a: Player, d: Player) -> int:
-        # 相手がバリアなら無効
-        if d.choice == 'barrier':
-            return 0
-        # 発射系
-        if a.choice and a.choice.startswith('shoot'):
-            return int(a.choice[-1])
+    def get_attack_power(p: Player) -> int:
+        # 発射系コマンドの場合、チャージ数を返す
+        if p.choice and p.choice.startswith('shoot'):
+            return int(p.choice[-1])
         return 0
 
     # ダメージ算出
-    d1 = damage(p1, p2)
-    d2 = damage(p2, p1)
-    p1.hp -= d2
-    p2.hp -= d1
+    p1_attack = get_attack_power(p1)
+    p2_attack = get_attack_power(p2)
+
+    # バリア判定
+    p1_blocked = p1.choice == 'barrier'
+    p2_blocked = p2.choice == 'barrier'
+
+    # ダメージ計算（バリアと相殺を考慮）
+    if not p1_blocked and not p2_blocked and p1_attack > 0 and p2_attack > 0:
+        # 両者が攻撃の場合、チャージの差分がダメージになる
+        if p1_attack > p2_attack:
+            p2.hp -= (p1_attack - p2_attack)
+        elif p2_attack > p1_attack:
+            p1.hp -= (p2_attack - p1_attack)
+        # チャージが同じ場合は相殺
+    else:
+        # 通常のダメージ処理
+        if not p2_blocked and p1_attack > 0:
+            p2.hp -= p1_attack
+        if not p1_blocked and p2_attack > 0:
+            p1.hp -= p2_attack
 
     # チャージ管理: チャージ追加 or 消費
     for p in (p1, p2):
