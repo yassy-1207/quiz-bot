@@ -604,11 +604,64 @@ class WolfNightView(discord.ui.View):
         if "attacked_by_wolf" not in room:
             room["attacked_by_wolf"] = set()
 
+        # 生存プレイヤーのみを表示（自分以外）
+        for target_id in room["alive"]:
+            if target_id != uid and room["role_map"].get(target_id) != "人狼":
+                target_user = werewolf_bot.get_user(target_id)
+                if target_user:
+                    button = WolfKillButton(cid, target_user)
+                    # 既に襲撃済みの場合はボタンを無効化
+                    if uid in room.get("attacked_by_wolf", set()):
+                        button.disabled = True
+                    self.add_item(button)
+
+class SeerNightView(discord.ui.View):
+    def __init__(self, cid: int, uid: int):
+        super().__init__(timeout=60)
+        self.cid = cid
+        self.user_id = uid
+        room = werewolf_rooms.get(cid)
+        if not room:
+            return
+
+        # 占い済みプレイヤーのセットを初期化
+        if "used_seer" not in room:
+            room["used_seer"] = set()
+
+        # 生存プレイヤーのみを表示（自分以外）
         for target_id in room["alive"]:
             if target_id != uid:
                 target_user = werewolf_bot.get_user(target_id)
                 if target_user:
-                    self.add_item(WolfKillButton(cid, target_user))
+                    button = SeerCheckButton(cid, target_user)
+                    # 既に占い済みの場合はボタンを無効化
+                    if uid in room.get("used_seer", set()):
+                        button.disabled = True
+                    self.add_item(button)
+
+class KnightNightView(discord.ui.View):
+    def __init__(self, cid: int, uid: int):
+        super().__init__(timeout=60)
+        self.cid = cid
+        self.user_id = uid
+        room = werewolf_rooms.get(cid)
+        if not room:
+            return
+
+        # 護衛済みプレイヤーのセットを初期化
+        if "used_knight" not in room:
+            room["used_knight"] = set()
+
+        # 生存プレイヤーのみを表示（自分以外）
+        for target_id in room["alive"]:
+            if target_id != uid:
+                target_user = werewolf_bot.get_user(target_id)
+                if target_user:
+                    button = KnightProtectButton(cid, target_user)
+                    # 既に護衛済みの場合はボタンを無効化
+                    if uid in room.get("used_knight", set()):
+                        button.disabled = True
+                    self.add_item(button)
 
 class WolfKillButton(discord.ui.Button):
     def __init__(self, cid: int, target_user: discord.User):
@@ -636,27 +689,14 @@ class WolfKillButton(discord.ui.Button):
 
         room["night_actions"]["werewolf_targets"].append(self.target_user.id)
         room.setdefault("attacked_by_wolf", set()).add(uid)
-        await interaction.response.send_message(f"✅ {self.target_user.display_name} を襲撃対象に選択しました。", ephemeral=True)
-        self.stop()
-
-class SeerNightView(discord.ui.View):
-    def __init__(self, cid: int, uid: int):
-        super().__init__(timeout=60)
-        self.cid = cid
-        self.user_id = uid
-        room = werewolf_rooms.get(cid)
-        if not room:
-            return
-
-        # 占い済みプレイヤーのセットを初期化
-        if "used_seer" not in room:
-            room["used_seer"] = set()
-
-        for target_id in room["alive"]:
-            if target_id != uid:
-                target_user = werewolf_bot.get_user(target_id)
-                if target_user:
-                    self.add_item(SeerCheckButton(cid, target_user))
+        
+        # 全てのボタンを無効化
+        for child in self.view.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self.view)
+        
+        await interaction.followup.send(f"✅ {self.target_user.display_name} を襲撃対象に選択しました。", ephemeral=True)
+        self.view.stop()
 
 class SeerCheckButton(discord.ui.Button):
     def __init__(self, cid: int, target_user: discord.User):
@@ -685,31 +725,17 @@ class SeerCheckButton(discord.ui.Button):
         room["night_actions"]["seer_target"] = self.target_user.id
         room.setdefault("used_seer", set()).add(uid)
         
+        # 全てのボタンを無効化
+        for child in self.view.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self.view)
+        
         # 占い結果をすぐに通知
         target_role = room["role_map"][self.target_user.id]
         is_werewolf = target_role == "人狼"
         result = "人狼" if is_werewolf else "村人陣営"
-        await interaction.response.send_message(f"🔮 {self.target_user.display_name} を占いました。\n結果：**{result}**", ephemeral=True)
-        self.stop()
-
-class KnightNightView(discord.ui.View):
-    def __init__(self, cid: int, uid: int):
-        super().__init__(timeout=60)
-        self.cid = cid
-        self.user_id = uid
-        room = werewolf_rooms.get(cid)
-        if not room:
-            return
-
-        # 護衛済みプレイヤーのセットを初期化
-        if "used_knight" not in room:
-            room["used_knight"] = set()
-
-        for target_id in room["alive"]:
-            if target_id != uid:
-                target_user = werewolf_bot.get_user(target_id)
-                if target_user:
-                    self.add_item(KnightProtectButton(cid, target_user))
+        await interaction.followup.send(f"🔮 {self.target_user.display_name} を占いました。\n結果：**{result}**", ephemeral=True)
+        self.view.stop()
 
 class KnightProtectButton(discord.ui.Button):
     def __init__(self, cid: int, target_user: discord.User):
@@ -737,8 +763,14 @@ class KnightProtectButton(discord.ui.Button):
 
         room["night_actions"]["knight_target"] = self.target_user.id
         room.setdefault("used_knight", set()).add(uid)
-        await interaction.response.send_message(f"🛡️ {self.target_user.display_name} を護衛対象に選択しました。", ephemeral=True)
-        self.stop()
+        
+        # 全てのボタンを無効化
+        for child in self.view.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self.view)
+        
+        await interaction.followup.send(f"🛡️ {self.target_user.display_name} を護衛対象に選択しました。", ephemeral=True)
+        self.view.stop()
 
 # =============================
 # ==== 昼フェーズ用 View / Button クラス ====
@@ -748,19 +780,29 @@ class VoteView(discord.ui.View):
     def __init__(self, cid: int):
         super().__init__(timeout=60)  # 1分でタイムアウト
         self.cid = cid
-        room = werewolf_rooms.get(cid)
-        if not room:
+        self.room = werewolf_rooms.get(cid)
+        if not self.room:
             return
         
         # 投票済みプレイヤーのセットを初期化
-        if "voted_players" not in room:
-            room["voted_players"] = set()
+        if "voted_players" not in self.room:
+            self.room["voted_players"] = set()
         
         # 生存者一覧からボタンを作成
-        for player in room["players"]:
-            if player.id in room["alive"]:
-                # 自分以外の生存者のみボタンを作成
+        for player in self.room["players"]:
+            if player.id in self.room["alive"]:
                 self.add_item(VoteButton(player))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # 投票済みチェック
+        if interaction.user.id in self.room.get("voted_players", set()):
+            await interaction.response.send_message("⚠️ あなたは既に投票済みです。", ephemeral=True)
+            return False
+        # 生存者チェック
+        if interaction.user.id not in self.room["alive"]:
+            await interaction.response.send_message("⚠️ あなたは投票できません。", ephemeral=True)
+            return False
+        return True
 
 class VoteButton(discord.ui.Button):
     def __init__(self, target_player: discord.User):
@@ -780,27 +822,30 @@ class VoteButton(discord.ui.Button):
                 return
 
             voter_id = interaction.user.id
-            if voter_id not in room["alive"]:
-                await interaction.response.send_message("⚠️ あなたは投票できません。", ephemeral=True)
-                return
-
-            # 投票済みチェック
-            if voter_id in room.get("voted_players", set()):
-                await interaction.response.send_message("⚠️ あなたは既に投票済みです。", ephemeral=True)
-                return
 
             # 投票を記録
             room.setdefault("votes", {})[voter_id] = int(self.custom_id)
             room.setdefault("voted_players", set()).add(voter_id)
             
+            # 全てのボタンを無効化（この投票者に対して）
+            for child in self.view.children:
+                child.disabled = True
+            await interaction.response.edit_message(view=self.view)
+            
             # 投票完了メッセージ
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"✅ {self.target_player.display_name} に投票しました。",
                 ephemeral=True
             )
 
+            # 投票状況を全体に通知
+            channel = interaction.channel
+            total_voters = len(room["alive"])
+            current_votes = len(room["votes"])
+            await channel.send(f"💫 投票状況: {current_votes}/{total_voters} 人が投票済み")
+
             # 全員が投票したかチェック
-            if len(room["votes"]) == len(room["alive"]):
+            if current_votes == total_voters:
                 await process_day_results(cid)
 
         except Exception as e:
