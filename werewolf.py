@@ -16,6 +16,7 @@ VOTE_TIME = 180  # 投票時間3分
 DISCUSSION_TIME = 300  # 議論時間5分
 NIGHT_TIME = 180  # 夜のアクション時間3分
 FIRST_NIGHT_TIME = 60  # 初日夜のアクション時間1分
+JOIN_TIMEOUT = 180  # 参加募集のタイムアウト時間3分
 
 # グローバル変数の定義
 werewolf_bot = None
@@ -139,8 +140,12 @@ def setup_werewolf(bot: commands.Bot):
         description = "\n".join([
             f"🐺 人狼ゲームを開始します（{players}人）",
             warning,
-            "以下から役職セットを選んでください：",
-            "",  # 空行を追加
+            "**■ 参加方法**",
+            "1. 以下から役職セットを選んでください",
+            "2. その後表示される「参加する」ボタンを押してください",
+            "3. 募集締切は3分です。時間内に参加者が揃わないとゲームは開始されません",
+            "",
+            "**■ 選択可能な役職セット**",
             *set_descriptions
         ])
 
@@ -164,9 +169,9 @@ def setup_werewolf(bot: commands.Bot):
             await interaction.response.send_message("⚠️ あなたは既に死亡しています。", ephemeral=True)
             return
 
-        # 投票フェーズを開始
-        await start_vote_phase(cid)
-        await interaction.response.send_message("✅ 投票を開始します。", ephemeral=True)
+        # 投票用のボタンを表示
+        view = VoteView(cid)
+        await interaction.response.send_message("👇 処刑する人を選んでください：", view=view, ephemeral=True)
 
     @bot.tree.command(name="じんろう中断", description="進行中の人狼ゲームを中断します")
     async def cancel_game(interaction: discord.Interaction):
@@ -242,8 +247,32 @@ def setup_werewolf(bot: commands.Bot):
 # =============================
 class JoinView(discord.ui.View):
     def __init__(self, channel_id: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=JOIN_TIMEOUT)  # 3分でタイムアウト
         self.channel_id = channel_id
+
+    async def on_timeout(self):
+        """タイムアウト時の処理"""
+        room = werewolf_rooms.get(self.channel_id)
+        if not room:
+            return
+
+        channel = werewolf_bot.get_channel(self.channel_id)
+        if not channel:
+            return
+
+        # 参加者が0人の場合は部屋を削除
+        if len(room["players"]) == 0:
+            del werewolf_rooms[self.channel_id]
+            await channel.send("⏰ 参加者が集まらなかったため、募集を終了します。")
+            return
+
+        # 参加者が揃っていない場合は部屋を削除
+        if len(room["players"]) < len(room["role_set"]):
+            player_count = len(room["players"])
+            needed_count = len(room["role_set"])
+            del werewolf_rooms[self.channel_id]
+            await channel.send(f"⏰ 制限時間（3分）が経過しました。（{player_count}/{needed_count}人）\n募集を終了します。")
+            return
 
     @discord.ui.button(label="参加する", style=discord.ButtonStyle.success)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -265,7 +294,13 @@ class JoinView(discord.ui.View):
 
         # 参加者リストに追加
         room["players"].append(interaction.user)
-        await interaction.response.send_message(f"✅ {interaction.user.mention} が参加しました！", ephemeral=False)
+        remaining = len(room["role_set"]) - len(room["players"])
+        remaining_time = self.timeout_remaining()
+        await interaction.response.send_message(
+            f"✅ {interaction.user.mention} が参加しました！\n"
+            f"あと{remaining}人必要です。（募集締切まで残り{remaining_time}秒）", 
+            ephemeral=False
+        )
 
         # 参加者数が役職数と揃ったら、役職配布 → 夜フェーズへ
         if len(room["players"]) == len(room["role_set"]):
@@ -301,6 +336,10 @@ async def process_night_results(cid: int):
     channel = werewolf_bot.get_channel(cid)
     if not room:
         return
+
+    # 初日の夜は最低待機時間を設ける
+    if room["day_count"] == 1:
+        await asyncio.sleep(10)  # 10秒の最低待機時間
 
     # 騎士の護衛を処理
     protected_id = room["night_actions"].get("knight_target")
@@ -352,7 +391,15 @@ async def process_night_results(cid: int):
     # 次のフェーズへ
     room["phase"] = "day"
     room["day_count"] = room.get("day_count", 1) + 1
-    await channel.send("💬 話し合いの時間です。投票コマンドで処刑する人を決めてください。")
+    
+    # 議論フェーズの説明を追加
+    await channel.send(
+        "💬 **議論の時間です**\n"
+        "1. 話し合いで人狼を推理しましょう\n"
+        "2. 議論が終わったら、`/投票` コマンドを実行して投票を開始してください\n"
+        "3. 投票で最多票を集めたプレイヤーが処刑されます\n"
+        "※ 全員の投票が完了するか、制限時間が経過すると自動的に処刑が実行されます"
+    )
 
 async def process_day_results(cid: int):
     """
