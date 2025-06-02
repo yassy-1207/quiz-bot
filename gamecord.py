@@ -17,6 +17,8 @@ if not (current_hour >= 12 or current_hour < 4):
 # === Discord Bot 基本設定 ===
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
+intents.presences = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # === 環境変数読み込み ===
