@@ -1029,7 +1029,7 @@ async def send_roles_and_start(cid: int):
     room["role_map"] = {user.id: role for user, role in zip(players, roles)}
     room["alive"] = set(user.id for user in players)
     room["dead"] = set()
-    room["phase"] = "night"
+    room["phase"] = PHASE_NIGHT
     room["day_count"] = 1
     room["night_actions"] = {
         "werewolf_targets": [],
@@ -1065,13 +1065,14 @@ async def send_roles_and_start(cid: int):
             # 初日は襲撃なしを通知
             await user.send("🌙 初日の夜は襲撃できません。")
         elif role == "占い師":
-            # 初日はランダムな対象を占う
-            possible_targets = [pid for pid in room["alive"] if pid != uid]
+            # 初日は人狼以外（白）のプレイヤーからランダムに占う
+            possible_targets = [pid for pid in room["alive"] 
+                              if pid != uid and room["role_map"][pid] != "人狼"]
             if possible_targets:
                 target = random.choice(possible_targets)
                 room["night_actions"]["seer_target"] = target
                 target_role = room["role_map"][target]
-                is_werewolf = target_role == "人狼"
+                is_werewolf = target_role == "人狼"  # 必ずFalseになるはず
                 result = "人狼" if is_werewolf else "村人陣営"
                 target_name = werewolf_bot.get_user(target).display_name
                 await user.send(f"🔮 初日の占い対象は {target_name} にランダムで決定されました。\n結果：**{result}**")
