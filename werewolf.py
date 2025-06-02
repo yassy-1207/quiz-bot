@@ -8,6 +8,13 @@ import os
 import random
 from dotenv import load_dotenv
 from collections import Counter
+from datetime import datetime, timedelta
+
+# === 定数定義 ===
+VOTE_WARNING_TIME = 30  # 投票終了30秒前に警告
+VOTE_TIME = 180  # 投票時間3分
+DISCUSSION_TIME = 300  # 議論時間5分
+NIGHT_TIME = 180  # 夜のアクション時間3分
 
 # グローバル変数の定義
 werewolf_bot = None
@@ -18,36 +25,26 @@ intents.members = True
 # =============================
 # 役職プリセット
 # =============================
-# {プレイヤー人数: [役職セット1, 役職セット2, ...]}
 ROLE_PRESETS = {
-    3: [
-        ["村人", "村人", "人狼"],  # 基本セット
-        ["村人", "占い師", "人狼"],  # 占い師セット
-        ["村人", "狂人", "人狼"],  # 狂人セット
-    ],
     4: [
-        ["村人", "村人", "村人", "人狼"],  # 基本セット
-        ["村人", "占い師", "村人", "人狼"],  # 占い師セット
-        ["村人", "村人", "狂人", "人狼"],  # 狂人セット
-        ["村人", "占い師", "狂人", "人狼"],  # バランスセット
+        ["村人", "村人", "占い師", "人狼"],  # 基本セット
+        ["村人", "占い師", "狂人", "人狼"],  # 狂人セット
+        ["村人", "騎士", "狂人", "人狼"],  # 騎士セット
     ],
     5: [
         ["村人", "村人", "占い師", "狂人", "人狼"],  # 基本セット
-        ["村人", "村人", "村人", "人狼", "人狼"],  # 人狼2セット
-        ["村人", "村人", "占い師", "人狼", "人狼"],  # 占い師・人狼2セット
-        ["村人", "占い師", "狂人", "人狼", "人狼"],  # フルバリエーションセット
+        ["村人", "騎士", "占い師", "狂人", "人狼"],  # 騎士セット
+        ["村人", "霊媒師", "占い師", "狂人", "人狼"],  # 霊媒師セット
     ],
     6: [
-        ["村人", "村人", "村人", "占い師", "狂人", "人狼"],  # 基本セット
-        ["村人", "村人", "占い師", "狂人", "人狼", "人狼"],  # 人狼2セット
-        ["村人", "村人", "村人", "占い師", "人狼", "人狼"],  # 占い師・人狼2セット
-        ["村人", "村人", "占い師", "狂人", "狂人", "人狼"],  # 狂人2セット
+        ["村人", "村人", "占い師", "騎士", "狂人", "人狼"],  # 基本セット
+        ["村人", "村人", "占い師", "霊媒師", "狂人", "人狼"],  # 霊媒師セット
+        ["村人", "騎士", "占い師", "霊媒師", "狂人", "人狼"],  # フルセット
     ],
     7: [
-        ["村人", "村人", "村人", "占い師", "狂人", "人狼", "人狼"],  # 基本セット
-        ["村人", "村人", "村人", "占い師", "占い師", "人狼", "人狼"],  # 占い師2セット
-        ["村人", "村人", "村人", "占い師", "狂人", "狂人", "人狼"],  # 狂人2セット
-        ["村人", "村人", "占い師", "狂人", "狂人", "人狼", "人狼"],  # フルバリエーションセット
+        ["村人", "村人", "占い師", "騎士", "霊媒師", "狂人", "人狼"],  # 基本セット
+        ["村人", "村人", "占い師", "騎士", "狂人", "人狼", "人狼"],  # 人狼2セット
+        ["村人", "村人", "占い師", "霊媒師", "狂人", "人狼", "人狼"],  # 霊媒師セット
     ],
 }
 
@@ -55,27 +52,33 @@ ROLE_PRESETS = {
 ROLE_DESCRIPTIONS = {
     "村人": "特別な能力は持ちませんが、話し合いで人狼を見つけ出しましょう。",
     "人狼": "夜フェーズで村人を襲撃できます。村人に悟られないように立ち回りましょう。",
-    "占い師": "夜フェーズで1人を占い、人狼かどうかを知ることができます。",
-    "狂人": "人狼陣営の村人です。人狼のことを知っていますが、村人のふりをして人狼を勝利に導きましょう。"
+    "占い師": "夜フェーズで1人を占い、人狼かどうかを知ることができます。初日はランダムな対象を占います。",
+    "狂人": "人狼陣営の村人です。人狼のことを知っていますが、村人のふりをして人狼を勝利に導きましょう。",
+    "騎士": "夜フェーズで1人を守ることができます。その人が人狼に襲撃されても死亡しません。",
+    "霊媒師": "夜フェーズで処刑された人の役職を知ることができます。"
 }
 
 # =============================
 # 部屋（ルーム）データ構造
 # =============================
 # werewolf_rooms[channel_id] = {
-#   "role_set": [...],        # 選択された役職リスト（例：["村人","占い師","人狼"]）
-#   "players": [...],         # 参加者の discord.User オブジェクトリスト
+#   "role_set": [...],        # 選択された役職リスト
+#   "players": [...],         # 参加者のdiscord.Userオブジェクトリスト
 #   "role_map": {user_id: role},  # 役職割当てマップ
-#   "alive": set(user_id, ...),   # 生存者の ID 集合
-#   "dead": set(),                # 死亡者の ID 集合
+#   "alive": set(user_id, ...),   # 生存者のID集合
+#   "dead": set(),                # 死亡者のID集合
 #   "phase": str,                 # "night" / "day" / "vote"
+#   "day_count": int,            # 経過日数（1日目から開始）
 #   "night_actions": {
-#       "werewolf_targets": [user_id, ...],  # 人狼が襲撃した ID リスト
-#       "seer_target": Optional[user_id],    # 占い師が占った ID
+#       "werewolf_targets": [user_id, ...],  # 人狼が襲撃したID
+#       "seer_target": Optional[user_id],    # 占い師が占ったID
+#       "knight_target": Optional[user_id],  # 騎士が守ったID
+#       "medium_result": Optional[str],      # 霊媒結果
 #       "madman_info": Optional[str],        # 狂人が得た情報
 #   },
-#   "votes": {voter_id: target_id, ...},     # 昼フェーズの投票マップ
-#   "last_vote_time": datetime,              # 最後の投票時刻
+#   "votes": {voter_id: target_id, ...},     # 投票マップ
+#   "vote_deadline": datetime,               # 投票期限
+#   "last_executed": Optional[user_id],      # 最後に処刑された人のID
 # }
 werewolf_rooms: dict[int, dict] = {}
 
@@ -102,10 +105,10 @@ def setup_werewolf(bot: commands.Bot):
 
     # === コマンド定義 ===
     @bot.tree.command(name="じんろう", description="人狼ゲームを始めます")
-    @app_commands.describe(players="プレイヤー数（3〜7）")
+    @app_commands.describe(players="プレイヤー数（4〜7）")
     async def werewolf(interaction: discord.Interaction, players: int):
-        if not 3 <= players <= 7:
-            await interaction.response.send_message("⚠️ プレイヤー数は3〜7人で指定してください。", ephemeral=True)
+        if not 4 <= players <= 7:
+            await interaction.response.send_message("⚠️ プレイヤー数は4〜7人で指定してください。", ephemeral=True)
             return
 
         cid = interaction.channel.id
@@ -118,6 +121,11 @@ def setup_werewolf(bot: commands.Bot):
             await interaction.response.send_message("⚠️ 指定されたプレイヤー数の役職セットが見つかりません。", ephemeral=True)
             return
 
+        # 4人ゲームの場合は注意書きを追加
+        warning = ""
+        if players == 4:
+            warning = "\n⚠️ **4人ゲームは役職が限られるため、ゲームバランスが偏る可能性があります。**\n"
+
         # 役職セットの説明を生成
         set_descriptions = []
         for i, role_set in enumerate(role_sets, 1):
@@ -129,6 +137,7 @@ def setup_werewolf(bot: commands.Bot):
 
         description = "\n".join([
             f"🐺 人狼ゲームを開始します（{players}人）",
+            warning,
             "以下から役職セットを選んでください：",
             "",  # 空行を追加
             *set_descriptions
@@ -136,6 +145,27 @@ def setup_werewolf(bot: commands.Bot):
 
         view = RoleSelectionView(role_sets)
         await interaction.response.send_message(description, view=view)
+
+    @bot.tree.command(name="投票", description="処刑する人に投票します")
+    async def vote(interaction: discord.Interaction):
+        cid = interaction.channel.id
+        room = werewolf_rooms.get(cid)
+        if not room:
+            await interaction.response.send_message("❌ このチャンネルでは人狼ゲームが進行していません。", ephemeral=True)
+            return
+
+        if room["phase"] != "day":
+            await interaction.response.send_message("⚠️ 今は投票フェーズではありません。", ephemeral=True)
+            return
+
+        uid = interaction.user.id
+        if uid not in room["alive"]:
+            await interaction.response.send_message("⚠️ あなたは既に死亡しています。", ephemeral=True)
+            return
+
+        # 投票フェーズを開始
+        await start_vote_phase(cid)
+        await interaction.response.send_message("✅ 投票を開始します。", ephemeral=True)
 
     @bot.tree.command(name="じんろう中断", description="進行中の人狼ゲームを中断します")
     async def cancel_game(interaction: discord.Interaction):
@@ -162,6 +192,40 @@ def setup_werewolf(bot: commands.Bot):
             await interaction.response.send_message("🔄 部屋をリセットしました。人狼ゲームを強制終了しました。", ephemeral=False)
         else:
             await interaction.response.send_message("❌ このチャンネルでは進行中の人狼ゲームがありません。", ephemeral=True)
+
+    @bot.tree.command(name="じんろうヘルプ", description="人狼ゲームのルールと役職の説明を表示します")
+    async def help_werewolf(interaction: discord.Interaction):
+        help_text = [
+            "🐺 **人狼ゲーム ヘルプ**",
+            "",
+            "**■ 基本ルール**",
+            "1. 参加者にランダムで役職が配られます",
+            "2. 昼と夜を繰り返しながらゲームが進行します",
+            "3. 昼は全員で話し合い、投票で1人を処刑します",
+            "4. 夜は各役職が特殊能力を使用できます",
+            "",
+            "**■ 勝利条件**",
+            "・村人陣営：人狼を全滅させる",
+            "・人狼陣営：生存者の半数以上を人狼にする（狂人は人数にカウントされません）",
+            "",
+            "**■ 役職説明**"
+        ]
+        
+        # 役職説明を追加
+        for role, desc in ROLE_DESCRIPTIONS.items():
+            help_text.append(f"・**{role}**：{desc}")
+
+        help_text.extend([
+            "",
+            "**■ コマンド一覧**",
+            "・`/じんろう [人数]`：人狼ゲームを開始",
+            "・`/投票`：処刑する人に投票（昼フェーズで使用）",
+            "・`/じんろう中断`：進行中のゲームを中断",
+            "・`/じんろうリセット`：ゲームを強制終了",
+            "・`/じんろうヘルプ`：このヘルプを表示"
+        ])
+
+        await interaction.response.send_message("\n".join(help_text), ephemeral=True)
 
     # === イベントリスナー定義 ===
     @bot.event
@@ -210,77 +274,84 @@ class JoinView(discord.ui.View):
 # =============================
 # フェーズ処理のヘルパー関数群
 # =============================
-def check_win_condition(room: dict) -> str | None:
+def check_win_condition(room: dict) -> tuple[str | None, str]:
     """
-    勝敗判定を行い、勝利チームを返す。
-    - 村人勝利: "villagers"
-    - 人狼勝利: "werewolves"
-    - 継続: None
+    勝敗判定を行い、勝利陣営とメッセージを返す
+    Returns:
+        tuple[str | None, str]: (勝利陣営, メッセージ)
+        - 勝利陣営: "villagers" / "werewolves" / None
+        - メッセージ: 勝利理由の説明
     """
     alive_ids = list(room["alive"])
-    roles_alive = [room["role_map"][uid] for uid in alive_ids]
-    num_wolves = roles_alive.count("人狼")
-    num_villagers = len(alive_ids) - num_wolves
-
+    num_alive = len(alive_ids)
+    
+    # 人狼の数をカウント（狂人は含まない）
+    num_wolves = sum(1 for uid in alive_ids if room["role_map"][uid] == "人狼")
+    
     if num_wolves == 0:
-        return "villagers"
-    if num_wolves >= num_villagers:
-        return "werewolves"
-    return None
+        return "villagers", "🎉 人狼が全滅したため、村人陣営の勝利です！"
+    elif num_wolves * 2 >= num_alive:
+        return "werewolves", "🐺 人狼が村人と同数以上になったため、人狼陣営の勝利です！"
+    return None, ""
 
 async def process_night_results(cid: int):
-    """
-    夜フェーズのアクションを集計し、朝フェーズへ移行。
-    """
+    """夜フェーズの結果を処理"""
     room = werewolf_rooms.get(cid)
     channel = werewolf_bot.get_channel(cid)
     if not room:
         return
 
-    # --- 襲撃処理 ---
+    # 騎士の護衛を処理
+    protected_id = room["night_actions"].get("knight_target")
+    
+    # 襲撃処理（騎士に守られていない場合のみ）
     killed_ids = room["night_actions"]["werewolf_targets"][:]
     unique_killed = set(killed_ids)
+    actually_killed = set()
+    
     for victim_id in unique_killed:
-        if victim_id in room["alive"]:
+        if victim_id != protected_id and victim_id in room["alive"]:
             room["alive"].remove(victim_id)
             room["dead"].add(victim_id)
+            actually_killed.add(victim_id)
 
-    if unique_killed:
-        killed_mentions = "、".join(f"<@{uid}>" for uid in unique_killed)
-        await channel.send(f"🌅 朝です。昨夜、{killed_mentions} が襲撃されました。")
+    # 朝の通知
+    if actually_killed:
+        killed_mentions = "、".join(f"<@{uid}>" for uid in actually_killed)
+        await channel.send(f"🌅 朝になりました。昨夜、{killed_mentions} が襲撃されました。")
     else:
-        await channel.send("🌅 朝です。昨夜の襲撃はありませんでした。")
+        await channel.send("🌅 朝になりました。昨夜の襲撃は失敗したようです。")
 
-    # --- 占い師処理 ---
+    # 占い結果を通知
     seer_target = room["night_actions"]["seer_target"]
     if seer_target is not None:
-        seer_id = None
         for uid, role in room["role_map"].items():
             if role == "占い師" and uid in room["alive"]:
-                seer_id = uid
-                break
-        if seer_id:
-            seer_user = await werewolf_bot.fetch_user(seer_id)
-            result_role = room["role_map"].get(seer_target, None)
-            if result_role == "人狼":
-                msg = f"🔮 あなたが占った <@{seer_target}> は **人狼** でした。"
-            else:
-                msg = f"🔮 あなたが占った <@{seer_target}> は **村人陣営** でした。"
-            try:
-                await seer_user.send(msg)
-            except discord.Forbidden:
-                await channel.send(f"⚠️ 占い師 <@{seer_id}> に DM 送信できません。DM を有効にしてください。")
+                seer_user = await werewolf_bot.fetch_user(uid)
+                target_role = room["role_map"].get(seer_target)
+                is_werewolf = target_role == "人狼"
+                result = "人狼" if is_werewolf else "村人陣営"
+                try:
+                    await seer_user.send(f"🔮 あなたが占った <@{seer_target}> は **{result}** でした。")
+                except discord.Forbidden:
+                    await channel.send(f"⚠️ 占い師 <@{uid}> に結果を送信できませんでした。")
 
-    # --- 昼フェーズの開始 ---
+    # 霊媒結果を通知
+    last_executed = room.get("last_executed")
+    if last_executed:
+        for uid, role in room["role_map"].items():
+            if role == "霊媒師" and uid in room["alive"]:
+                medium_user = await werewolf_bot.fetch_user(uid)
+                executed_role = room["role_map"].get(last_executed)
+                try:
+                    await medium_user.send(f"👻 処刑された <@{last_executed}> は **{executed_role}** でした。")
+                except discord.Forbidden:
+                    await channel.send(f"⚠️ 霊媒師 <@{uid}> に結果を送信できませんでした。")
+
+    # 次のフェーズへ
     room["phase"] = "day"
-    room["votes"] = {}
-    await channel.send("💬 昼の議論を開始します。1分以内に投票を行ってください。以下のボタンから投票できます。")
-
-    vote_view = VoteView(cid)
-    await channel.send("🔻 投票する人を選択してください：", view=vote_view)
-
-    # 投票待機
-    asyncio.create_task(wait_for_votes(cid))
+    room["day_count"] = room.get("day_count", 1) + 1
+    await channel.send("💬 話し合いの時間です。投票コマンドで処刑する人を決めてください。")
 
 async def process_day_results(cid: int):
     """
@@ -313,14 +384,9 @@ async def process_day_results(cid: int):
                 await channel.send(f"🔨 投票の結果、<@{target_id}> に {count} 票が入り、吊られました。")
 
     # 勝敗判定
-    winner = check_win_condition(room)
-    if winner == "villagers":
-        await channel.send("🎉 村人陣営の勝利です！")
-        await show_game_summary(cid)
-        del werewolf_rooms[cid]
-        return
-    if winner == "werewolves":
-        await channel.send("🐺 人狼陣営の勝利です！")
+    winner, message = check_win_condition(room)
+    if winner:
+        await channel.send(message)
         await show_game_summary(cid)
         del werewolf_rooms[cid]
         return
@@ -328,8 +394,10 @@ async def process_day_results(cid: int):
     # 次の夜へ
     room["phase"] = "night"
     room["night_actions"] = {
-        "werewolf_targets": [], 
+        "werewolf_targets": [],
         "seer_target": None,
+        "knight_target": None,
+        "medium_result": None,
         "madman_info": None
     }
     await channel.send("🌙 夜になります。各役職は DM を確認してください。")
@@ -579,8 +647,16 @@ class RoleSetButton(discord.ui.Button):
             "alive": set(),
             "dead": set(),
             "phase": None,
-            "night_actions": {"werewolf_targets": [], "seer_target": None},
+            "day_count": 1,
+            "night_actions": {
+                "werewolf_targets": [],
+                "seer_target": None,
+                "knight_target": None,
+                "medium_result": None,
+                "madman_info": None
+            },
             "votes": {},
+            "last_executed": None
         }
 
         # どのセットが選ばれたかをチャンネルに表示
@@ -602,6 +678,7 @@ class RoleSelectionView(discord.ui.View):
 # =============================
 
 async def send_roles_and_start(cid: int):
+    """役職配布と初日の処理"""
     room = werewolf_rooms.get(cid)
     channel = werewolf_bot.get_channel(cid)
     if not room:
@@ -612,48 +689,55 @@ async def send_roles_and_start(cid: int):
     random.shuffle(roles)
     random.shuffle(players)
 
-    # 【1】 役職を DM で配布し、role_map, alive, dead, phase, night_actions を初期化
+    # 役職配布と初期化
     room["role_map"] = {user.id: role for user, role in zip(players, roles)}
     room["alive"] = set(user.id for user in players)
     room["dead"] = set()
     room["phase"] = "night"
-    room["night_actions"] = {"werewolf_targets": [], "seer_target": None}
+    room["day_count"] = 1
+    room["night_actions"] = {
+        "werewolf_targets": [],
+        "seer_target": None,
+        "knight_target": None,
+        "medium_result": None,
+        "madman_info": None
+    }
     room["votes"] = {}
+    room["last_executed"] = None
 
-    for user, role in zip(players, roles):
-        try:
-            await user.send(f"🎭 あなたの役職は **{role}** です。内緒にしてね！")
-        except discord.Forbidden:
-            await channel.send(f"⚠️ <@{user.id}> に DM が送れませんでした。DM を有効にしてください。")
-
-    # 【2】 チャンネルに夜開始通知
-    await channel.send("🌙 夜が始まります。人狼と占い師は DM を確認してください。")
-
-    # 【3】 夜フェーズ用 DM を全員に送信
+    # 役職通知とアクション要求
     for user in players:
         uid = user.id
-        if uid not in room["alive"]:
-            continue
         role = room["role_map"][uid]
-        if role == "人狼":
-            view = WolfNightView(cid, uid)
-            try:
-                await user.send("🌙 【夜フェーズ】 襲撃する相手を選んでください：", view=view)
-            except discord.Forbidden:
-                await channel.send(f"⚠️ <@{uid}> に DM 送信できません。")
-        elif role == "占い師":
-            view = SeerNightView(cid, uid)
-            try:
-                await user.send("🌙 【夜フェーズ】 占う相手を選んでください：", view=view)
-            except discord.Forbidden:
-                await channel.send(f"⚠️ <@{uid}> に DM 送信できません。")
-        else:
-            try:
-                await user.send("🌙 【夜フェーズ】 あなたは村人です。お休みしてください。")
-            except discord.Forbidden:
-                await channel.send(f"⚠️ <@{uid}> に DM 送信できません。")
+        
+        # 基本の役職説明
+        role_desc = ROLE_DESCRIPTIONS.get(role, "役職の説明がありません")
+        try:
+            await user.send(f"🎭 あなたの役職は **{role}** です。\n{role_desc}")
+        except discord.Forbidden:
+            await channel.send(f"⚠️ <@{uid}> に DM が送れませんでした。")
+            continue
 
-    # 【4】 夜アクション待機タスクを起動
+        # 特殊役職の追加情報
+        if role == "人狼":
+            # 人狼同士を知らせる
+            wolves = [uid for uid, r in room["role_map"].items() if r == "人狼"]
+            other_wolves = [wid for wid in wolves if wid != uid]
+            if other_wolves:
+                wolf_info = "、".join(f"<@{wid}>" for wid in other_wolves)
+                await user.send(f"🐺 仲間の人狼は {wolf_info} です。")
+        elif role == "占い師":
+            # 初日はランダムな対象を占う
+            possible_targets = [pid for pid in room["alive"] if pid != uid]
+            if possible_targets:
+                target = random.choice(possible_targets)
+                room["night_actions"]["seer_target"] = target
+                await user.send(f"🔮 初日の占い対象は <@{target}> にランダムで決定されました。")
+
+    # 全体通知
+    await channel.send("🌙 初日の夜です。各役職は DM を確認してください。")
+    
+    # 夜アクション待機
     asyncio.create_task(wait_for_night_actions(cid))
 
 # === 投票処理の改善 ===

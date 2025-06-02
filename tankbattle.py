@@ -15,6 +15,15 @@ intents.members = True
 # ルーム情報格納 {room_id: {"channel": TextChannel, "players": [Player,...], "started": bool}}
 rooms: dict[str, dict] = {}
 
+# === アクション名の定義 ===
+ACTION_NAMES = {
+    "barrier": "🛡️ バリア",
+    "charge": "⚡ チャージ",
+    "attack1": "💥 1チャージ攻撃",
+    "attack2": "💥💥 2チャージ攻撃",
+    "attack3": "💥💥💥 3チャージ攻撃"
+}
+
 class Player:
     def __init__(self, user: discord.User):
         self.user = user
@@ -249,3 +258,74 @@ def resolve_turn(p1: Player, p2: Player):
         elif p.choice and p.choice.startswith('shoot'):
             n = int(p.choice[-1])
             p.charge = max(p.charge - n, 0)
+
+async def process_turn(p1_action, p2_action, battle_data):
+    """ターンの処理を行う"""
+    p1_id = battle_data["player1"]
+    p2_id = battle_data["player2"]
+    
+    # アクション結果を記録
+    battle_data["last_actions"] = {
+        p1_id: p1_action,
+        p2_id: p2_action
+    }
+
+    # ... (既存の処理ロジック) ...
+
+async def show_status(channel, battle_data):
+    """バトル状況を表示"""
+    p1_id = battle_data["player1"]
+    p2_id = battle_data["player2"]
+    p1_hp = battle_data["hp"][p1_id]
+    p2_hp = battle_data["hp"][p2_id]
+    p1_charge = battle_data["charge"][p1_id]
+    p2_charge = battle_data["charge"][p2_id]
+    p1_barrier = battle_data["barrier"][p1_id]
+    p2_barrier = battle_data["barrier"][p2_id]
+
+    # 前のターンのアクションを取得
+    last_actions = battle_data.get("last_actions", {})
+    p1_last_action = last_actions.get(p1_id)
+    p2_last_action = last_actions.get(p2_id)
+
+    # ステータス表示用の絵文字
+    hp_emoji = "❤️"
+    charge_emoji = "⚡"
+    barrier_emoji = "🛡️"
+
+    # プレイヤー1のステータス行
+    p1_status = [
+        f"<@{p1_id}>",
+        f"{hp_emoji} {p1_hp}",
+        f"{charge_emoji} {p1_charge}",
+    ]
+    if p1_barrier:
+        p1_status.append(f"{barrier_emoji}")
+    if p1_last_action:
+        p1_status.append(f"➡️ {ACTION_NAMES.get(p1_last_action, '不明')}")
+
+    # プレイヤー2のステータス行
+    p2_status = [
+        f"<@{p2_id}>",
+        f"{hp_emoji} {p2_hp}",
+        f"{charge_emoji} {p2_charge}",
+    ]
+    if p2_barrier:
+        p2_status.append(f"{barrier_emoji}")
+    if p2_last_action:
+        p2_status.append(f"➡️ {ACTION_NAMES.get(p2_last_action, '不明')}")
+
+    status_message = [
+        "🎮 **バトル状況**",
+        "```",
+        f"プレイヤー1: {' '.join(p1_status)}",
+        f"プレイヤー2: {' '.join(p2_status)}",
+        "```",
+        "",
+        "**コマンド説明**",
+        "・`バリア`：全ての攻撃を防ぐ（連続使用不可）",
+        "・`チャージ`：攻撃のためのエネルギーを貯める",
+        "・`1〜3チャージ攻撃`：チャージを消費して攻撃"
+    ]
+
+    await channel.send("\n".join(status_message))
