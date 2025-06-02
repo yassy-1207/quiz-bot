@@ -84,17 +84,24 @@ async def run_quiz(channel: discord.TextChannel, category: str, difficulty: str,
         # 問題を送信
         await channel.send(f"**第{i}問/{count}問**\n{q['question']}\n⏰ {DEFAULT_TIMEOUT}秒で回答")
 
-        def check(m):
-            return (
-                m.channel.id == cid
-                and m.author.id in participants
-                and m.content.strip() == q['answer']
-            )
-
         try:
-            msg = await bot.wait_for('message', timeout=DEFAULT_TIMEOUT, check=check)
-            scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
-            await channel.send(f"🎉 {msg.author.mention} 正解！")
+            while True:  # 正解が出るまでループ
+                msg = await channel.guild.bot.wait_for(
+                    'message',
+                    timeout=DEFAULT_TIMEOUT,
+                    check=lambda m: (
+                        m.channel.id == cid
+                        and m.author.id in participants
+                        and not m.author.bot
+                    )
+                )
+                
+                # 回答チェック
+                if msg.content.strip() == q['answer']:
+                    scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
+                    await channel.send(f"🎉 {msg.author.mention} 正解！")
+                    break  # 正解が出たのでループを抜ける
+                
         except asyncio.TimeoutError:
             await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
 
