@@ -100,13 +100,13 @@ async def run_quiz(channel: discord.TextChannel, category: str, difficulty: str,
                 try:
                     msg = await quiz_bot.wait_for('message', timeout=DEFAULT_TIMEOUT, check=check)
                     if msg.content.strip() == q['answer']:
-            scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
-            await channel.send(f"🎉 {msg.author.mention} 正解！")
+                        scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
+                        await channel.send(f"🎉 {msg.author.mention} 正解！")
                         answered = True
                         # 少し待ってから次の問題へ
                         await asyncio.sleep(2)
-        except asyncio.TimeoutError:
-            await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
+                except asyncio.TimeoutError:
+                    await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
                     # 少し待ってから次の問題へ
                     await asyncio.sleep(2)
                     break
@@ -251,7 +251,7 @@ def setup_quizking(bot: commands.Bot):
             text = "\n".join([f"<@{uid}>: {pts}点" for uid, pts in sorted_list])
             await channel.send(f"🏁 このセッションの結果：\n{text}")
         else:
-            await channel.send("�� 正解者なしでした。")
+            await channel.send("😢 正解者なしでした。")
 
     # スラッシュコマンド /クイズ大会
     @bot.tree.command(name="クイズ大会", description="カテゴリ・難易度・問題数を指定してクイズを準備")
