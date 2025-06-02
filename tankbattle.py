@@ -69,78 +69,9 @@ class CommandSelectionView(discord.ui.View):
     async def shoot3(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.process(interaction, 'shoot3')
 
-class JoinView(discord.ui.View):
-    def __init__(self, room_id: str):
-        super().__init__(timeout=None)
-        self.room_id = room_id
-
-    @discord.ui.button(label="参加する", style=discord.ButtonStyle.primary)
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        room = rooms.get(self.room_id)
-        if not room:
-            return await interaction.response.send_message("⚠️ このルームは存在しません。", ephemeral=True)
-        if any(p.user.id == interaction.user.id for p in room['players']):
-            return await interaction.response.send_message("⚠️ 既に参加済みです。", ephemeral=True)
-        if len(room['players']) >= 2:
-            return await interaction.response.send_message("⚠️ 満員です。", ephemeral=True)
-
-        player = Player(interaction.user)
-        room['players'].append(player)
-        await interaction.response.send_message(f"✅ 参加登録完了！", ephemeral=True)
-        await interaction.channel.send(f"✅ {interaction.user.mention} が参加しました！")
-
-        if len(room['players']) == 2 and not room['started']:
-            room['started'] = True
-            await interaction.channel.send("🎮 参加者が揃いました！ゲームを開始します...")
-            await asyncio.sleep(1)
-            start_game = next(
-                func for name, func in globals().items() 
-                if callable(func) and name == 'start_game'
-            )
-            await start_game(room)
-
-# 同時解決ロジック
-def resolve_turn(p1: Player, p2: Player):
-    def damage(a: Player, d: Player) -> int:
-        # 相手がバリアなら無効
-        if d.choice == 'barrier':
-            return 0
-        # 発射系
-        if a.choice and a.choice.startswith('shoot'):
-            return int(a.choice[-1])
-        return 0
-
-    # ダメージ算出
-    d1 = damage(p1, p2)
-    d2 = damage(p2, p1)
-    p1.hp -= d2
-    p2.hp -= d1
-
-    # チャージ管理: チャージ追加 or 消費
-    for p in (p1, p2):
-        if p.choice == 'charge':
-            p.charge += 1
-        elif p.choice and p.choice.startswith('shoot'):
-            n = int(p.choice[-1])
-            p.charge = max(p.charge - n, 0)
-
 def setup_tankbattle(bot: commands.Bot):
     global tank_bot
     tank_bot = bot
-
-    @bot.tree.command(name='ミニ戦車バトル', description='2人同時ターン制ミニ戦車バトル')
-    async def make_room(interaction: discord.Interaction):
-        room_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
-        rooms[room_id] = {
-            'channel': interaction.channel,
-            'players': [],
-            'started': False
-        }
-        view = JoinView(room_id)
-        await interaction.response.send_message(
-            f"🎮 ルーム `{room_id}` を作成しました！参加者2名で開始します。",
-            view=view
-        )
 
     async def start_game(room: dict):
         try:
@@ -207,9 +138,48 @@ def setup_tankbattle(bot: commands.Bot):
             print(f"Error in tank battle: {e}")
             await channel.send("⚠️ ゲームでエラーが発生しました。")
         finally:
-            del rooms[room_id]
+            if room_id in rooms:
+                del rooms[room_id]
 
-    return start_game  # start_game関数を返す
+    class JoinView(discord.ui.View):
+        def __init__(self, room_id: str):
+            super().__init__(timeout=None)
+            self.room_id = room_id
+
+        @discord.ui.button(label="参加する", style=discord.ButtonStyle.primary)
+        async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+            room = rooms.get(self.room_id)
+            if not room:
+                return await interaction.response.send_message("⚠️ このルームは存在しません。", ephemeral=True)
+            if any(p.user.id == interaction.user.id for p in room['players']):
+                return await interaction.response.send_message("⚠️ 既に参加済みです。", ephemeral=True)
+            if len(room['players']) >= 2:
+                return await interaction.response.send_message("⚠️ 満員です。", ephemeral=True)
+
+            player = Player(interaction.user)
+            room['players'].append(player)
+            await interaction.response.send_message(f"✅ 参加登録完了！", ephemeral=True)
+            await interaction.channel.send(f"✅ {interaction.user.mention} が参加しました！")
+
+            if len(room['players']) == 2 and not room['started']:
+                room['started'] = True
+                await interaction.channel.send("🎮 参加者が揃いました！ゲームを開始します...")
+                await asyncio.sleep(1)
+                await start_game(room)
+
+    @bot.tree.command(name='ミニ戦車バトル', description='2人同時ターン制ミニ戦車バトル')
+    async def make_room(interaction: discord.Interaction):
+        room_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+        rooms[room_id] = {
+            'channel': interaction.channel,
+            'players': [],
+            'started': False
+        }
+        view = JoinView(room_id)
+        await interaction.response.send_message(
+            f"🎮 ルーム `{room_id}` を作成しました！参加者2名で開始します。",
+            view=view
+        )
 
 async def wait_for_choice(player: Player):
     for _ in range(60):
@@ -217,3 +187,28 @@ async def wait_for_choice(player: Player):
             return
         await asyncio.sleep(0.5)
     player.choice = 'charge'
+
+# 同時解決ロジック
+def resolve_turn(p1: Player, p2: Player):
+    def damage(a: Player, d: Player) -> int:
+        # 相手がバリアなら無効
+        if d.choice == 'barrier':
+            return 0
+        # 発射系
+        if a.choice and a.choice.startswith('shoot'):
+            return int(a.choice[-1])
+        return 0
+
+    # ダメージ算出
+    d1 = damage(p1, p2)
+    d2 = damage(p2, p1)
+    p1.hp -= d2
+    p2.hp -= d1
+
+    # チャージ管理: チャージ追加 or 消費
+    for p in (p1, p2):
+        if p.choice == 'charge':
+            p.charge += 1
+        elif p.choice and p.choice.startswith('shoot'):
+            n = int(p.choice[-1])
+            p.charge = max(p.charge - n, 0)
