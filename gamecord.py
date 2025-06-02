@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+import random
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import discord
@@ -28,10 +29,15 @@ if not token:
 from quizking import setup_quizking
 setup_quizking(bot)
 
-# === minitankの機能（関数・コマンド）を読み込む ===
+# === tankbattleの機能（関数・コマンド）を読み込む ===
 from tankbattle import setup_tankbattle
 setup_tankbattle(bot)
 
+# === werewolfの機能（関数・コマンド）を読み込む ===
+#from werewolf import setup_werewolf
+#setup_werewolf(bot)
+
+# === ルール表示コマンド ===
 @bot.tree.command(name="ルール", description="各ゲームのルールを表示します")
 @discord.app_commands.describe(game="対象ゲーム名を選んでください")
 @discord.app_commands.choices(game=[
