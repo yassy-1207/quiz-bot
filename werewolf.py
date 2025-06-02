@@ -109,48 +109,60 @@ def setup_werewolf(bot: commands.Bot):
     @bot.tree.command(name="じんろう", description="人狼ゲームを始めます")
     @app_commands.describe(players="プレイヤー数（4〜7）")
     async def werewolf(interaction: discord.Interaction, players: int):
-        if not 4 <= players <= 7:
-            await interaction.response.send_message("⚠️ プレイヤー数は4〜7人で指定してください。", ephemeral=True)
-            return
+        try:
+            # まず即座に応答を返す
+            await interaction.response.defer()
 
-        cid = interaction.channel.id
-        if cid in werewolf_rooms:
-            await interaction.response.send_message("⚠️ このチャンネルではすでにゲームが進行中です。", ephemeral=True)
-            return
+            if not 4 <= players <= 7:
+                await interaction.followup.send("⚠️ プレイヤー数は4〜7人で指定してください。", ephemeral=True)
+                return
 
-        role_sets = ROLE_PRESETS.get(players, [])
-        if not role_sets:
-            await interaction.response.send_message("⚠️ 指定されたプレイヤー数の役職セットが見つかりません。", ephemeral=True)
-            return
+            cid = interaction.channel.id
+            if cid in werewolf_rooms:
+                await interaction.followup.send("⚠️ このチャンネルではすでにゲームが進行中です。", ephemeral=True)
+                return
 
-        # 4人ゲームの場合は注意書きを追加
-        warning = ""
-        if players == 4:
-            warning = "\n⚠️ **4人ゲームは役職が限られるため、ゲームバランスが偏る可能性があります。**\n"
+            role_sets = ROLE_PRESETS.get(players, [])
+            if not role_sets:
+                await interaction.followup.send("⚠️ 指定されたプレイヤー数の役職セットが見つかりません。", ephemeral=True)
+                return
 
-        # 役職セットの説明を生成
-        set_descriptions = []
-        for i, role_set in enumerate(role_sets, 1):
-            role_counts = Counter(role_set)
-            desc_parts = []
-            for role, count in role_counts.items():
-                desc_parts.append(f"{role}×{count}")
-            set_descriptions.append(f"セット{i}: {', '.join(desc_parts)}")
+            # 4人ゲームの場合は注意書きを追加
+            warning = ""
+            if players == 4:
+                warning = "\n⚠️ **4人ゲームは役職が限られるため、ゲームバランスが偏る可能性があります。**\n"
 
-        description = "\n".join([
-            f"🐺 人狼ゲームを開始します（{players}人）",
-            warning,
-            "**■ 参加方法**",
-            "1. 以下から役職セットを選んでください",
-            "2. その後表示される「参加する」ボタンを押してください",
-            "3. 募集締切は3分です。時間内に参加者が揃わないとゲームは開始されません",
-            "",
-            "**■ 選択可能な役職セット**",
-            *set_descriptions
-        ])
+            # 役職セットの説明を生成
+            set_descriptions = []
+            for i, role_set in enumerate(role_sets, 1):
+                role_counts = Counter(role_set)
+                desc_parts = []
+                for role, count in role_counts.items():
+                    desc_parts.append(f"{role}×{count}")
+                set_descriptions.append(f"セット{i}: {', '.join(desc_parts)}")
 
-        view = RoleSelectionView(role_sets)
-        await interaction.response.send_message(description, view=view)
+            description = "\n".join([
+                f"🐺 人狼ゲームを開始します（{players}人）",
+                warning,
+                "**■ 参加方法**",
+                "1. 以下から役職セットを選んでください",
+                "2. その後表示される「参加する」ボタンを押してください",
+                "3. 募集締切は3分です。時間内に参加者が揃わないとゲームは開始されません",
+                "",
+                "**■ 選択可能な役職セット**",
+                *set_descriptions
+            ])
+
+            view = RoleSelectionView(role_sets)
+            await interaction.followup.send(description, view=view)
+
+        except Exception as e:
+            # エラーハンドリング
+            if not interaction.response.is_done():
+                await interaction.response.send_message("⚠️ エラーが発生しました。もう一度お試しください。", ephemeral=True)
+            else:
+                await interaction.followup.send("⚠️ エラーが発生しました。もう一度お試しください。", ephemeral=True)
+            raise e  # エラーを再度発生させてログに記録
 
     @bot.tree.command(name="じんろう中断", description="進行中の人狼ゲームを中断します")
     async def cancel_game(interaction: discord.Interaction):

@@ -112,6 +112,13 @@ def setup_tankbattle(bot: commands.Bot):
                     embed = discord.Embed(title='💥 ターン結果', color=discord.Color.blue())
                     embed.add_field(name='あなた', value=f"HP: {p.hp}\nCharge: {p.charge}", inline=True)
                     embed.add_field(name='相手', value=f"HP: {opponent.hp}\nCharge: {opponent.charge}", inline=True)
+
+                    # 前のターンの行動を表示（2ターン目以降）
+                    if p.last_choice is not None and opponent.last_choice is not None:
+                        your_action = ACTION_NAMES.get(p.last_choice, p.last_choice)
+                        opp_action = ACTION_NAMES.get(opponent.last_choice, opponent.last_choice)
+                        embed.add_field(name='前回の行動', value=f"あなた: {your_action}\n相手: {opp_action}", inline=False)
+
                     embed.set_footer(text='コマンドを選択 (30秒以内; 未選択時はチャージ)')
                     view = CommandSelectionView(p)
                     try:
@@ -124,7 +131,7 @@ def setup_tankbattle(bot: commands.Bot):
                 await asyncio.gather(*[wait_for_choice(p) for p in players])
                 
                 # 解決
-                resolve_turn(players[0], players[1])
+                turn_result = resolve_turn(players[0], players[1])
                 
                 # choiceとlast_choice更新
                 for p in players:
@@ -251,13 +258,22 @@ def resolve_turn(p1: Player, p2: Player):
         if not p1_blocked and p2_attack > 0:
             p1.hp -= p2_attack
 
-    # チャージ管理: チャージ追加 or 消費
-    for p in (p1, p2):
+    # チャージ処理
+    for p in [p1, p2]:
         if p.choice == 'charge':
-            p.charge += 1
+            p.charge = min(p.charge + 1, 3)  # 最大3チャージまで
         elif p.choice and p.choice.startswith('shoot'):
-            n = int(p.choice[-1])
-            p.charge = max(p.charge - n, 0)
+            p.charge -= int(p.choice[-1])
+
+    # アクション結果を返す
+    return {
+        'p1_action': p1.choice,
+        'p2_action': p2.choice,
+        'p1_blocked': p1_blocked,
+        'p2_blocked': p2_blocked,
+        'p1_attack': p1_attack,
+        'p2_attack': p2_attack
+    }
 
 async def process_turn(p1_action, p2_action, battle_data):
     """ターンの処理を行う"""
