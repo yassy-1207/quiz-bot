@@ -11,7 +11,7 @@ from discord import app_commands
 # === 時間制限設定 ===
 now = datetime.utcnow() + timedelta(hours=9)
 current_hour = now.hour
-if not (current_hour >= 12 or current_hour < 4):
+if current_hour >= 4 and current_hour < 12:
     print(f"[{now.strftime('%Y-%m-%d %H:%M')}] Bot is outside operating hours. Shutting down.")
     sys.exit(0)
 
