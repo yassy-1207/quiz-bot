@@ -122,6 +122,11 @@ def setup_tankbattle(bot: commands.Bot):
         message = error_messages.get(type(error), str(error))
         await interaction.response.send_message(message, ephemeral=True)
 
+    @bot.event
+    async def on_ready():
+        cleanup_inactive_rooms.start()
+        print("Tank battle cleanup task started")
+
     # 戦績表示コマンドもsetup_tankbattle関数の中に移動
     @bot.tree.command(name='戦車戦績', description='ミニ戦車バトルの戦績を表示')
     async def show_stats(interaction: discord.Interaction, target: Optional[discord.User] = None):
@@ -165,9 +170,6 @@ def setup_tankbattle(bot: commands.Bot):
         )
         
         await interaction.response.send_message(embed=embed)
-
-    # クリーンアップタスクの開始
-    cleanup_inactive_rooms.start()
 
     async def start_game(room: dict):
         try:
