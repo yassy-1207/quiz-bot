@@ -4,6 +4,10 @@ from discord.ext import commands
 import asyncio
 import random
 import string
+from datetime import datetime
+from discord.ext import tasks
+from discord import app_commands
+from typing import Optional
 
 # グローバル変数の定義
 tank_bot = None
@@ -24,31 +28,56 @@ ACTION_NAMES = {
     "attack3": "💥💥💥 3チャージ攻撃"
 }
 
+# 1. 定数の整理
+GAME_SETTINGS = {
+    "INITIAL_HP": 10,
+    "MAX_CHARGE": 3,
+    "COMMAND_TIMEOUT": 30,
+    "JOIN_TIMEOUT": 180
+}
+
 class Player:
     def __init__(self, user: discord.User):
         self.user = user
-        self.hp: int = 10
+        self.hp: int = GAME_SETTINGS["INITIAL_HP"]
         self.charge: int = 0
         self.choice: str | None = None
         self.last_choice: str | None = None
+        self.total_damage_dealt: int = 0  # 与ダメージ合計
+        self.total_damage_taken: int = 0  # 被ダメージ合計
+
+    @property
+    def is_alive(self) -> bool:
+        return self.hp > 0
+
+    def apply_damage(self, damage: int):
+        self.hp = max(0, self.hp - damage)
+        self.total_damage_taken += damage
+
+    def add_charge(self):
+        self.charge = min(self.charge + 1, GAME_SETTINGS["MAX_CHARGE"])
 
 class CommandSelectionView(discord.ui.View):
     def __init__(self, player: Player):
-        super().__init__(timeout=30)
+        super().__init__(timeout=GAME_SETTINGS["COMMAND_TIMEOUT"])
         self.player = player
-        # 連続バリア禁止
-        if player.last_choice == 'barrier':
-            for child in self.children:
-                if getattr(child, 'label', None) == 'バリア':
-                    child.disabled = True
-        # チャージ残量で発射ボタンを制御
-        charge = player.charge
+        self.update_buttons()
+
+    def update_buttons(self):
+        """ボタンの状態を更新"""
         for child in self.children:
-            label = getattr(child, 'label', '')
-            if label.endswith('チャージ発射'):
-                n = int(label[0])
-                if charge < n:
+            if isinstance(child, discord.ui.Button):
+                # バリア連続使用禁止
+                if child.label == "バリア" and self.player.last_choice == 'barrier':
                     child.disabled = True
+                    child.style = discord.ButtonStyle.secondary
+                
+                # チャージ不足の攻撃を無効化
+                elif child.label.endswith('チャージ発射'):
+                    required = int(child.label[0])
+                    if self.player.charge < required:
+                        child.disabled = True
+                        child.style = discord.ButtonStyle.secondary
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.player.user.id
@@ -345,3 +374,180 @@ async def show_status(channel, battle_data):
     ]
 
     await channel.send("\n".join(status_message))
+
+@tasks.loop(minutes=5)
+async def cleanup_inactive_rooms():
+    current_time = datetime.now()
+    inactive_rooms = []
+    for room_id, room in rooms.items():
+        if not room['started']:
+            created_at = room.get('created_at', current_time)
+            if (current_time - created_at).total_seconds() > 180:  # 3分
+                inactive_rooms.append(room_id)
+    for room_id in inactive_rooms:
+        del rooms[room_id]
+
+async def send_dm_or_channel(user: discord.User, channel: discord.TextChannel, content: str, **kwargs):
+    try:
+        await user.send(content, **kwargs)
+        return True
+    except discord.Forbidden:
+        # DMが送れない場合はチャンネルで代替
+        await channel.send(f"{user.mention} {content}", **kwargs)
+        return False
+
+@bot.tree.error
+async def on_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    error_messages = {
+        app_commands.CommandOnCooldown: lambda e: f"⏳ クールダウン中です（{e.retry_after:.1f}秒）",
+        app_commands.MissingPermissions: "⚠️ 権限がありません",
+        Exception: "❌ エラーが発生しました"
+    }
+    message = error_messages.get(type(error), str(error))
+    await interaction.response.send_message(message, ephemeral=True)
+
+# 3. ゲーム状態管理の改善
+class TankBattleGame:
+    def __init__(self, channel: discord.TextChannel):
+        self.channel = channel
+        self.players: list[Player] = []
+        self.started: bool = False
+        self.created_at = datetime.now()
+        self.turn_count: int = 0
+
+    async def add_player(self, user: discord.User) -> bool:
+        if len(self.players) >= 2:
+            return False
+        player = Player(user)
+        self.players.append(player)
+        return True
+
+    def is_player(self, user_id: int) -> bool:
+        return any(p.user.id == user_id for p in self.players)
+
+# 1. 戦績管理クラス
+class GameStats:
+    def __init__(self, user_id: int):
+        self.stats = player_stats.setdefault(user_id, {
+            "wins": 0,
+            "losses": 0,
+            "total_games": 0,
+            "max_damage_dealt": 0,
+            "perfect_wins": 0,  # ノーダメージ勝利
+            "total_damage_dealt": 0,
+            "total_damage_taken": 0
+        })
+
+    def add_result(self, won: bool, damage_dealt: int, damage_taken: int):
+        self.stats["total_games"] += 1
+        if won:
+            self.stats["wins"] += 1
+            if damage_taken == 0:
+                self.stats["perfect_wins"] += 1
+        else:
+            self.stats["losses"] += 1
+        
+        self.stats["max_damage_dealt"] = max(
+            self.stats["max_damage_dealt"], 
+            damage_dealt
+        )
+        self.stats["total_damage_dealt"] += damage_dealt
+        self.stats["total_damage_taken"] += damage_taken
+
+# 2. 戦績表示コマンド
+@bot.tree.command(name='戦車戦績', description='ミニ戦車バトルの戦績を表示')
+async def show_stats(interaction: discord.Interaction, target: Optional[discord.User] = None):
+    user = target or interaction.user
+    stats = GameStats(user.id).stats
+    
+    if stats["total_games"] == 0:
+        await interaction.response.send_message(
+            f"{user.mention} の戦績はありません",
+            ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(
+        title=f"🎮 {user.display_name} の戦車バトル戦績",
+        color=discord.Color.blue()
+    )
+    
+    win_rate = stats["wins"] / stats["total_games"] * 100
+    avg_damage = stats["total_damage_dealt"] / stats["total_games"]
+    
+    embed.add_field(
+        name="基本統計",
+        value=(
+            f"総対戦数: {stats['total_games']}\n"
+            f"勝利: {stats['wins']}\n"
+            f"敗北: {stats['losses']}\n"
+            f"勝率: {win_rate:.1f}%"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="戦闘統計",
+        value=(
+            f"最大ダメージ: {stats['max_damage_dealt']}\n"
+            f"平均ダメージ: {avg_damage:.1f}\n"
+            f"完全勝利: {stats['perfect_wins']}"
+        ),
+        inline=False
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+# 1. ダメージ計算の改善
+def calculate_damage(attacker: Player, defender: Player) -> int:
+    """より戦略的なダメージ計算"""
+    if defender.choice == 'barrier':
+        return 0
+    
+    attack_power = int(attacker.choice[-1]) if attacker.choice.startswith('shoot') else 0
+    if not attack_power:
+        return 0
+        
+    # チャージ量に応じたボーナスダメージ
+    bonus = attack_power * 0.2  # 20%ボーナス
+    return attack_power + round(bonus)
+
+# テストケース
+def test_game_mechanics():
+    # 1. 基本的な攻撃テスト
+    p1 = Player(None)
+    p2 = Player(None)
+    p1.charge = 2
+    p1.choice = 'shoot2'
+    p2.choice = 'charge'
+    
+    result = resolve_turn(p1, p2)
+    assert p2.hp == 8  # 2ダメージ
+    assert p1.charge == 0  # チャージ消費
+    assert p2.charge == 1  # チャージ増加
+
+    # 2. バリアテスト
+    p1 = Player(None)
+    p2 = Player(None)
+    p1.charge = 3
+    p1.choice = 'shoot3'
+    p2.choice = 'barrier'
+    
+    result = resolve_turn(p1, p2)
+    assert p2.hp == 10  # ダメージなし
+    assert p1.charge == 0  # チャージ消費
+    assert p2.charge == 0  # バリアはチャージ増加なし
+
+    # 3. 相殺テスト
+    p1 = Player(None)
+    p2 = Player(None)
+    p1.charge = 2
+    p2.charge = 2
+    p1.choice = 'shoot2'
+    p2.choice = 'shoot2'
+    
+    result = resolve_turn(p1, p2)
+    assert p1.hp == 10  # ダメージなし
+    assert p2.hp == 10  # ダメージなし
+    assert p1.charge == 0  # チャージ消費
+    assert p2.charge == 0  # チャージ消費
