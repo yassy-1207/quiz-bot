@@ -111,6 +111,64 @@ def setup_tankbattle(bot: commands.Bot):
     global tank_bot
     tank_bot = bot
 
+    # エラーハンドラーをsetup_tankbattle関数の中に移動
+    @bot.tree.error
+    async def on_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        error_messages = {
+            app_commands.CommandOnCooldown: lambda e: f"⏳ クールダウン中です（{e.retry_after:.1f}秒）",
+            app_commands.MissingPermissions: "⚠️ 権限がありません",
+            Exception: "❌ エラーが発生しました"
+        }
+        message = error_messages.get(type(error), str(error))
+        await interaction.response.send_message(message, ephemeral=True)
+
+    # 戦績表示コマンドもsetup_tankbattle関数の中に移動
+    @bot.tree.command(name='戦車戦績', description='ミニ戦車バトルの戦績を表示')
+    async def show_stats(interaction: discord.Interaction, target: Optional[discord.User] = None):
+        user = target or interaction.user
+        stats = GameStats(user.id).stats
+        
+        if stats["total_games"] == 0:
+            await interaction.response.send_message(
+                f"{user.mention} の戦績はありません",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title=f"🎮 {user.display_name} の戦車バトル戦績",
+            color=discord.Color.blue()
+        )
+        
+        win_rate = stats["wins"] / stats["total_games"] * 100
+        avg_damage = stats["total_damage_dealt"] / stats["total_games"]
+        
+        embed.add_field(
+            name="基本統計",
+            value=(
+                f"総対戦数: {stats['total_games']}\n"
+                f"勝利: {stats['wins']}\n"
+                f"敗北: {stats['losses']}\n"
+                f"勝率: {win_rate:.1f}%"
+            ),
+            inline=False
+        )
+        
+        embed.add_field(
+            name="戦闘統計",
+            value=(
+                f"最大ダメージ: {stats['max_damage_dealt']}\n"
+                f"平均ダメージ: {avg_damage:.1f}\n"
+                f"完全勝利: {stats['perfect_wins']}"
+            ),
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed)
+
+    # クリーンアップタスクの開始
+    cleanup_inactive_rooms.start()
+
     async def start_game(room: dict):
         try:
             room_id = next(k for k,v in rooms.items() if v is room)
@@ -396,16 +454,6 @@ async def send_dm_or_channel(user: discord.User, channel: discord.TextChannel, c
         await channel.send(f"{user.mention} {content}", **kwargs)
         return False
 
-@bot.tree.error
-async def on_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    error_messages = {
-        app_commands.CommandOnCooldown: lambda e: f"⏳ クールダウン中です（{e.retry_after:.1f}秒）",
-        app_commands.MissingPermissions: "⚠️ 権限がありません",
-        Exception: "❌ エラーが発生しました"
-    }
-    message = error_messages.get(type(error), str(error))
-    await interaction.response.send_message(message, ephemeral=True)
-
 # 3. ゲーム状態管理の改善
 class TankBattleGame:
     def __init__(self, channel: discord.TextChannel):
@@ -453,50 +501,6 @@ class GameStats:
         )
         self.stats["total_damage_dealt"] += damage_dealt
         self.stats["total_damage_taken"] += damage_taken
-
-# 2. 戦績表示コマンド
-@bot.tree.command(name='戦車戦績', description='ミニ戦車バトルの戦績を表示')
-async def show_stats(interaction: discord.Interaction, target: Optional[discord.User] = None):
-    user = target or interaction.user
-    stats = GameStats(user.id).stats
-    
-    if stats["total_games"] == 0:
-        await interaction.response.send_message(
-            f"{user.mention} の戦績はありません",
-            ephemeral=True
-        )
-        return
-
-    embed = discord.Embed(
-        title=f"🎮 {user.display_name} の戦車バトル戦績",
-        color=discord.Color.blue()
-    )
-    
-    win_rate = stats["wins"] / stats["total_games"] * 100
-    avg_damage = stats["total_damage_dealt"] / stats["total_games"]
-    
-    embed.add_field(
-        name="基本統計",
-        value=(
-            f"総対戦数: {stats['total_games']}\n"
-            f"勝利: {stats['wins']}\n"
-            f"敗北: {stats['losses']}\n"
-            f"勝率: {win_rate:.1f}%"
-        ),
-        inline=False
-    )
-    
-    embed.add_field(
-        name="戦闘統計",
-        value=(
-            f"最大ダメージ: {stats['max_damage_dealt']}\n"
-            f"平均ダメージ: {avg_damage:.1f}\n"
-            f"完全勝利: {stats['perfect_wins']}"
-        ),
-        inline=False
-    )
-    
-    await interaction.response.send_message(embed=embed)
 
 # 1. ダメージ計算の改善
 def calculate_damage(attacker: Player, defender: Player) -> int:
