@@ -49,19 +49,29 @@ setup_tankbattle(bot)
 from werewolf import setup_werewolf
 setup_werewolf(bot)
 
+# === connectfourの機能（関数・コマンド）を読み込む ===
+from connectfour import setup_connectfour
+setup_connectfour(bot)
+
+# === connect4_3dの機能（関数・コマンド）を読み込む ===
+from connect4_3d import setup_connect4_3d
+setup_connect4_3d(bot)
+
 # === ルール表示コマンド ===
 @bot.tree.command(name="ルール", description="各ゲームのルールを表示します")
 @discord.app_commands.describe(game="対象ゲーム名を選んでください")
 @discord.app_commands.choices(game=[
     discord.app_commands.Choice(name="クイズ", value="quiz"),
     discord.app_commands.Choice(name="ミニ戦車バトル", value="tank"),
-    discord.app_commands.Choice(name="人狼（準備中）", value="werewolf")
+    discord.app_commands.Choice(name="人狼", value="werewolf"),
+    discord.app_commands.Choice(name="コネクトフォー", value="connectfour"),
+    discord.app_commands.Choice(name="立体コネクトフォー", value="connect4_3d")
 ])
 async def rule(interaction: discord.Interaction, game: str):
     if game == "quiz":
         text = (
             "📚 **クイズのルール**\n"
-            "- カテゴリと難易度を選んでクイズを出題！\n"
+            "- 難易度を選んでクイズを出題！\n"
             "- 参加者全員で競い合い、最も正解数が多い人が勝利。\n"
             "- 制限時間内に答えないと不正解になるよ。\n"
         )
@@ -77,10 +87,27 @@ async def rule(interaction: discord.Interaction, game: str):
         )
     elif game == "werewolf":
         text = (
-            "🐺 **人狼ゲーム（準備中）**\n"
+            "🐺 **人狼ゲーム**\n"
             "- 参加者にランダムで役職が割り振られます。\n"
             "- 昼に議論、夜に人狼が行動。\n"
-            "- 生き残るのは村人か人狼か！？（詳細は後日）"
+            "- 生き残るのは村人か人狼か！？"
+        )
+    elif game == "connectfour":
+        text = (
+            "🔴 **コネクトフォーのルール**\n"
+            "- 2人で交互に駒を落としていくボードゲーム\n"
+            "- 縦・横・斜めのいずれかで4つ並べると勝利\n"
+            "- 全てのマスが埋まると引き分け\n"
+            "- 数字ボタンを押して駒を配置！"
+        )
+    elif game == "connect4_3d":
+        text = (
+            "🎲 **立体コネクトフォーのルール**\n"
+            "- 4x4x4の立方体空間で遊ぶ3D版四目並べ\n"
+            "- 座標を選ぶと、その位置に駒が落ちていく\n"
+            "- 縦・横・斜め、どの方向でも4つ並べば勝利\n"
+            "- 立体的な並びも有効（空間的な想像力が必要！）\n"
+            "- 各層ごとの状態が表示されます"
         )
     else:
         text = "❌ 不明なゲーム名です。"

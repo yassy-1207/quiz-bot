@@ -9,6 +9,8 @@ import random
 from dotenv import load_dotenv
 from collections import Counter
 from datetime import datetime, timedelta
+from typing import Dict, Set, List, Optional, Union, Tuple, FrozenSet
+from functools import lru_cache
 
 # === 定数定義 ===
 VOTE_WARNING_TIME = 30  # 投票終了30秒前に警告
@@ -29,14 +31,51 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
+# プレイヤーの戦績を保持
+player_stats: Dict[int, Dict[str, Dict[str, int]]] = {}  # user_id -> role -> stats
+
+class GameStats:
+    def __init__(self, user_id: int):
+        if user_id not in player_stats:
+            player_stats[user_id] = {
+                "村人陣営": {"wins": 0, "losses": 0, "total_games": 0},
+                "人狼陣営": {"wins": 0, "losses": 0, "total_games": 0}
+            }
+        self.stats = player_stats[user_id]
+
+    def add_result(self, role: str, is_win: bool):
+        """戦績を更新する"""
+        team = "人狼陣営" if role in ["人狼", "狂人"] else "村人陣営"
+        if is_win:
+            self.stats[team]["wins"] += 1
+        else:
+            self.stats[team]["losses"] += 1
+        self.stats[team]["total_games"] += 1
+
+    def get_stats_display(self) -> str:
+        """戦績の表示文字列を生成"""
+        display = []
+        for team, stats in self.stats.items():
+            total = stats["total_games"]
+            if total > 0:
+                win_rate = stats["wins"] / total * 100
+                display.append(
+                    f"**{team}**\n"
+                    f"🎮 総対戦数: {total}\n"
+                    f"🏆 勝利: {stats['wins']}\n"
+                    f"💔 敗北: {stats['losses']}\n"
+                    f"📊 勝率: {win_rate:.1f}%\n"
+                )
+        return "\n".join(display) if display else "まだ対戦記録がありません"
+
 # =============================
-# 役職プリセット
+# 役職プリセットを改善（バランス調整）
 # =============================
 ROLE_PRESETS = {
     4: [
         ["村人", "村人", "占い師", "人狼"],  # 基本セット
         ["村人", "占い師", "狂人", "人狼"],  # 狂人セット
-        ["村人", "騎士", "狂人", "人狼"],  # 騎士セット
+        ["村人", "騎士", "占い師", "人狼"],  # 騎士セット
     ],
     5: [
         ["村人", "村人", "占い師", "狂人", "人狼"],  # 基本セット
@@ -53,16 +92,29 @@ ROLE_PRESETS = {
         ["村人", "村人", "占い師", "騎士", "狂人", "人狼", "人狼"],  # 人狼2セット
         ["村人", "村人", "占い師", "霊媒師", "狂人", "人狼", "人狼"],  # 霊媒師セット
     ],
+    8: [  # 8人用セットを追加
+        ["村人", "村人", "村人", "占い師", "騎士", "霊媒師", "狂人", "人狼"],  # バランスセット
+        ["村人", "村人", "占い師", "騎士", "霊媒師", "狂人", "人狼", "人狼"],  # 人狼2セット
+    ]
 }
 
-# 役職の説明文
+# 役職の説明文を改善（より詳細な説明）
 ROLE_DESCRIPTIONS = {
-    "村人": "特別な能力は持ちませんが、話し合いで人狼を見つけ出しましょう。",
-    "人狼": "夜フェーズで村人を襲撃できます。村人に悟られないように立ち回りましょう。",
-    "占い師": "夜フェーズで1人を占い、人狼かどうかを知ることができます。初日はランダムな対象を占います。",
-    "狂人": "人狼陣営の村人です。人狼のことを知っていますが、村人のふりをして人狼を勝利に導きましょう。",
-    "騎士": "夜フェーズで1人を守ることができます。その人が人狼に襲撃されても死亡しません。",
-    "霊媒師": "夜フェーズで処刑された人の役職を知ることができます。"
+    "村人": "特別な能力は持ちませんが、話し合いで人狼を見つけ出しましょう。投票の際は、各プレイヤーの発言や行動を注意深く観察することが重要です。",
+    "人狼": "夜フェーズで村人を襲撃できます。村人に悟られないように立ち回りましょう。他の人狼と協力して、村人たちを欺く必要があります。",
+    "占い師": "夜フェーズで1人を占い、人狼かどうかを知ることができます。初日はランダムな対象を占います。結果は「人狼」か「村人陣営」のどちらかです。",
+    "狂人": "人狼陣営の村人です。人狼のことを知っていますが、村人のふりをして人狼を勝利に導きましょう。ただし、人狼は狂人が誰かを知りません。",
+    "騎士": "夜フェーズで1人を守ることができます。その人が人狼に襲撃されても死亡しません。自分自身は守れません。",
+    "霊媒師": "夜フェーズで処刑された人の役職を知ることができます。占い師の情報と組み合わせることで、より正確な推理が可能です。"
+}
+
+# フェーズごとの制限時間を調整
+PHASE_TIMERS = {
+    "join": 180,      # 参加募集時間（3分）
+    "first_night": 60,  # 初日夜（1分）
+    "night": 120,      # 夜フェーズ（2分）
+    "discussion": 300,  # 議論フェーズ（5分）
+    "vote": 120,       # 投票フェーズ（2分）
 }
 
 # =============================
@@ -241,6 +293,16 @@ def setup_werewolf(bot: commands.Bot):
 
         await interaction.response.send_message("\n".join(help_text), ephemeral=True)
 
+    @bot.tree.command(name="じんろう戦績", description="人狼ゲームの戦績を表示します")
+    async def werewolf_stats(interaction: discord.Interaction, target: Optional[discord.User] = None):
+        """戦績表示コマンド"""
+        user = target or interaction.user
+        stats = GameStats(user.id)
+        await interaction.response.send_message(
+            f"🏆 {user.mention} の人狼ゲーム戦績\n\n{stats.get_stats_display()}",
+            ephemeral=True
+        )
+
     # === イベントリスナー定義 ===
     @bot.event
     async def on_ready():
@@ -348,26 +410,24 @@ class JoinView(discord.ui.View):
 # =============================
 # フェーズ処理のヘルパー関数群
 # =============================
-def check_win_condition(room: dict) -> tuple[str | None, str]:
-    """
-    勝敗判定を行い、勝利陣営とメッセージを返す
-    Returns:
-        tuple[str | None, str]: (勝利陣営, メッセージ)
-        - 勝利陣営: "villagers" / "werewolves" / None
-        - メッセージ: 勝利理由の説明
-    """
-    alive_ids = list(room["alive"])
-    num_alive = len(alive_ids)
+@lru_cache(maxsize=128)
+def check_win_condition_cached(alive_players: FrozenSet[int], wolf_players: FrozenSet[int]) -> Tuple[str, str]:
+    """勝利条件のチェック（キャッシュ付き）"""
+    wolf_count = len(wolf_players & alive_players)
+    villager_count = len(alive_players) - wolf_count
     
-    # 人狼の数をカウント（狂人は含まない）
-    num_wolves = sum(1 for uid in alive_ids if room["role_map"][uid] == "人狼")
-    num_villagers = num_alive - num_wolves  # 生存者から人狼を引いた数（狂人含む）
+    if wolf_count == 0:
+        return "villagers", "人狼が全滅したため、村人陣営の勝利です！"
+    elif wolf_count >= villager_count:
+        return "werewolves", "人狼が村人の数以上になったため、人狼陣営の勝利です！"
+    return "", ""
 
-    if num_wolves == 0:
-        return "villagers", "🎉 人狼が全滅したため、村人陣営の勝利です！"
-    elif num_wolves >= num_villagers:  # 人狼が村人陣営以上になった場合
-        return "werewolves", "🐺 人狼が村人陣営と同数以上になったため、人狼陣営の勝利です！"
-    return None, ""
+def check_win_condition(room: dict) -> Tuple[str, str]:
+    """勝利条件のチェック（メインロジック）"""
+    # キャッシュ用にFrozenSetに変換
+    alive = frozenset(room["alive"])
+    wolves = frozenset(uid for uid, role in room["role_map"].items() if role == "人狼")
+    return check_win_condition_cached(alive, wolves)
 
 async def process_night_results(cid: int):
     """夜フェーズの結果を処理"""
@@ -489,7 +549,7 @@ async def process_day_results(cid: int):
     await channel.send("⏩ 全員の準備が整ったら、次のフェーズへスキップできます：", view=view)
 
 async def start_voting_phase(cid: int):
-    """投票フェーズを開始する"""
+    """投票フェーズを開始する（UI改善版）"""
     room = werewolf_rooms.get(cid)
     channel = werewolf_bot.get_channel(cid)
     if not room:
@@ -499,15 +559,34 @@ async def start_voting_phase(cid: int):
     room["phase"] = PHASE_VOTE
     room["votes"] = {}
     room["voted_players"] = set()
+    room["vote_start_time"] = datetime.now()
 
-    # 投票フェーズの開始を通知
-    await channel.send(
-        "🗳️ **投票フェーズを開始します**\n"
-        "1. 各プレイヤーにDMで投票ボタンが送られます\n"
-        "2. 生存者全員が投票するか、3分の制限時間が経過すると自動的に処刑が実行されます"
+    # 投票フェーズの開始を通知（改善版）
+    embed = discord.Embed(
+        title="🗳️ 投票フェーズ開始",
+        description=(
+            "全員で話し合って出た結論を投票に反映させましょう。\n"
+            "以下の点に注意して投票してください：\n"
+            "・占い結果や霊媒結果を総合的に判断\n"
+            "・不自然な行動をしたプレイヤーに注目\n"
+            "・投票先を決める際は理由も考える"
+        ),
+        color=discord.Color.blue()
     )
+    embed.add_field(
+        name="⏰ 制限時間",
+        value=f"{PHASE_TIMERS['vote'] // 60}分",
+        inline=True
+    )
+    embed.add_field(
+        name="📊 現在の生存者",
+        value=str(len(room["alive"])) + "人",
+        inline=True
+    )
+    
+    await channel.send(embed=embed)
 
-    # 生存者のみに投票ボタンを表示
+    # 生存者のみに投票ボタンを表示（DMで）
     for user_id in room["alive"]:
         user = werewolf_bot.get_user(user_id)
         if user:
@@ -519,18 +598,46 @@ async def start_voting_phase(cid: int):
                     if target_user:
                         view.add_item(VoteButton(target_user))
             try:
-                await user.send("👇 投票する相手を選んでください：", view=view)
+                await user.send(
+                    "👇 投票する相手を選んでください。\n"
+                    "投票は1回限りで変更できません。慎重に選択してください。",
+                    view=view
+                )
             except discord.Forbidden:
                 # DMが送れない場合はチャンネルでメンション付きで表示
                 await channel.send(f"<@{user_id}> 投票する相手を選んでください：", view=view)
 
-    # 投票タイマーの開始
-    asyncio.create_task(wait_for_votes(cid))
+    # 投票状況の定期更新タスクを開始
+    asyncio.create_task(update_vote_status(cid))
 
     # 新しいフェーズスキップボタンを表示
     skip_view = PhaseSkipView(cid)
     room["active_views"].append(skip_view)
     await channel.send("⏩ 全員の投票が完了したら、次のフェーズへスキップできます：", view=skip_view)
+
+async def update_vote_status(cid: int):
+    """投票状況を定期的に更新（30秒ごと）"""
+    room = werewolf_rooms.get(cid)
+    channel = werewolf_bot.get_channel(cid)
+    if not room:
+        return
+
+    while room["phase"] == PHASE_VOTE:
+        # 残り時間を計算
+        elapsed = datetime.now() - room["vote_start_time"]
+        remaining = PHASE_TIMERS["vote"] - int(elapsed.total_seconds())
+        
+        if remaining <= 0:
+            # タイムアウト処理
+            await process_vote_results(cid)
+            break
+        
+        # 投票状況を更新
+        status = get_vote_status_display(room)
+        status += f"\n\n⏰ 残り時間: {remaining // 60}分{remaining % 60}秒"
+        
+        await channel.send(status)
+        await asyncio.sleep(30)  # 30秒待機
 
 async def process_vote_results(cid: int):
     """投票結果を処理し、次のフェーズへ移行する"""
@@ -594,20 +701,59 @@ async def process_vote_results(cid: int):
 
 async def show_game_summary(cid: int):
     """
-    ゲーム終了時に役職一覧を表示
+    ゲーム終了時に役職一覧と戦績を表示
     """
     room = werewolf_rooms.get(cid)
     channel = werewolf_bot.get_channel(cid)
     if not room:
         return
 
-    summary = ["📊 **ゲーム結果**"]
+    # 勝利陣営を判定
+    winner, _ = check_win_condition(room)
+    is_werewolf_win = winner == "werewolves"
+
+    # 戦績を更新
+    for user in room["players"]:
+        uid = user.id
+        role = room["role_map"][uid]
+        is_werewolf_team = role in ["人狼", "狂人"]
+        is_win = (is_werewolf_win and is_werewolf_team) or (not is_werewolf_win and not is_werewolf_team)
+        GameStats(uid).add_result(role, is_win)
+
+    # サマリーを生成
+    summary = [
+        "📊 **ゲーム結果**",
+        f"🌅 経過日数: {room['day_count']}日",
+        f"⌛ 総プレイ時間: {int((datetime.now() - room['start_time']).total_seconds() // 60)}分\n"
+    ]
+
+    # 陣営ごとにプレイヤーを分類
+    villagers = []
+    wolves = []
     for user in room["players"]:
         uid = user.id
         role = room["role_map"][uid]
         status = "💀" if uid in room["dead"] else "🏃"
-        summary.append(f"{status} <@{uid}>: {role}")
-    
+        player_info = f"{status} <@{uid}>: {role}"
+        if role in ["人狼", "狂人"]:
+            wolves.append(player_info)
+        else:
+            villagers.append(player_info)
+
+    summary.extend([
+        "**村人陣営**",
+        *villagers,
+        "\n**人狼陣営**",
+        *wolves
+    ])
+
+    # 戦績を追加
+    summary.append("\n**📈 プレイヤー戦績**")
+    for user in room["players"]:
+        uid = user.id
+        stats = GameStats(uid)
+        summary.append(f"\n<@{uid}> の戦績:\n{stats.get_stats_display()}")
+
     await channel.send("\n".join(summary))
 
 async def wait_for_votes(cid: int):
@@ -1246,3 +1392,227 @@ def initialize_room(cid: int, role_set: list):
         "last_executed": None,
         "channel_id": cid
     }
+
+# ゲーム進行状況の表示を改善
+def get_game_status_display(room: dict) -> str:
+    """ゲームの現在の状態を表示する文字列を生成"""
+    phase_emojis = {
+        PHASE_NIGHT: "🌙",
+        PHASE_DAY: "☀️",
+        PHASE_VOTE: "🗳️"
+    }
+    
+    status = [
+        f"{phase_emojis.get(room['phase'], '❓')} **{room['day_count']}日目 {room['phase']}フェーズ**",
+        f"👥 生存者: {len(room['alive'])}人",
+        f"💀 死亡者: {len(room['dead'])}人",
+        f"⏱️ 経過時間: {int((datetime.now() - room['start_time']).total_seconds() // 60)}分"
+    ]
+    
+    # 死亡者一覧（いる場合のみ）
+    if room['dead']:
+        dead_players = []
+        for uid in room['dead']:
+            user = werewolf_bot.get_user(uid)
+            role = room['role_map'][uid]
+            if user:
+                dead_players.append(f"{user.display_name}({role})")
+        status.append(f"\n☠️ 死亡者一覧: {', '.join(dead_players)}")
+    
+    return "\n".join(status)
+
+# 投票フェーズの表示を改善
+def get_vote_status_display(room: dict) -> str:
+    """投票状況の表示を生成"""
+    voted = len(room.get('votes', {}))
+    total = len(room['alive'])
+    remaining = total - voted
+    
+    status = [
+        "🗳️ **投票状況**",
+        f"✅ 投票済み: {voted}人",
+        f"⏳ 未投票: {remaining}人",
+        f"👥 投票権限者: {total}人"
+    ]
+    
+    # 投票済みプレイヤーを表示
+    if voted > 0:
+        voted_players = []
+        for voter_id in room['votes'].keys():
+            voter = werewolf_bot.get_user(voter_id)
+            if voter:
+                voted_players.append(voter.display_name)
+        status.append(f"\n投票済みプレイヤー: {', '.join(voted_players)}")
+    
+    return "\n".join(status)
+
+# エラーハンドリングの改善
+class WerewolfGameError(Exception):
+    """人狼ゲーム固有のエラー"""
+    pass
+
+class GameNotFoundError(WerewolfGameError):
+    """ゲームが見つからない場合のエラー"""
+    pass
+
+class InvalidPhaseError(WerewolfGameError):
+    """不正なフェーズ遷移のエラー"""
+    pass
+
+class PlayerNotFoundError(WerewolfGameError):
+    """プレイヤーが見つからない場合のエラー"""
+    pass
+
+# エラーハンドリング付きの安全なプレイヤー操作
+def get_player_safely(user_id: int) -> discord.User:
+    """プレイヤーを安全に取得"""
+    user = werewolf_bot.get_user(user_id)
+    if not user:
+        raise PlayerNotFoundError(f"プレイヤー(ID: {user_id})が見つかりません")
+    return user
+
+def get_room_safely(channel_id: int) -> dict:
+    """ゲームルームを安全に取得"""
+    room = werewolf_rooms.get(channel_id)
+    if not room:
+        raise GameNotFoundError(f"チャンネル(ID: {channel_id})でゲームが見つかりません")
+    return room
+
+# 非同期処理の改善
+async def safe_dm(user: discord.User, content: str, **kwargs) -> bool:
+    """DMを安全に送信（失敗してもエラーにならない）"""
+    try:
+        await user.send(content, **kwargs)
+        return True
+    except discord.Forbidden:
+        return False
+    except Exception as e:
+        print(f"DM送信エラー(ユーザー: {user.id}): {e}")
+        return False
+
+# ゲーム状態の検証
+def validate_game_state(room: dict) -> None:
+    """ゲーム状態の整合性を検証"""
+    # プレイヤー情報の検証
+    for user_id in room["players"]:
+        if user_id not in room["role_map"]:
+            raise WerewolfGameError(f"プレイヤー(ID: {user_id})の役職が未設定です")
+    
+    # 生存者と死亡者の重複チェック
+    if set(room["alive"]) & set(room["dead"]):
+        raise WerewolfGameError("生存者と死亡者が重複しています")
+    
+    # 全プレイヤーが生存または死亡に含まれているか確認
+    all_players = set(room["players"])
+    accounted_players = set(room["alive"]) | set(room["dead"])
+    if all_players != accounted_players:
+        raise WerewolfGameError("プレイヤーの状態が不正です")
+
+# エラーハンドリング付きのコマンド実行
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """コマンドエラーのハンドリング"""
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(
+            f"⏳ コマンドのクールダウン中です。{error.retry_after:.1f}秒後に再試行してください。",
+            ephemeral=True
+        )
+    elif isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "⚠️ このコマンドを実行する権限がありません。",
+            ephemeral=True
+        )
+    elif isinstance(error, WerewolfGameError):
+        await interaction.response.send_message(
+            f"🚫 ゲームエラー: {str(error)}",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "❌ 予期せぬエラーが発生しました。しばらく待ってから再試行してください。",
+            ephemeral=True
+        )
+        # エラーログ出力
+        print(f"コマンドエラー: {error}")
+
+# パフォーマンス最適化
+def cleanup_inactive_games():
+    """非アクティブなゲームをクリーンアップ"""
+    current_time = datetime.now()
+    inactive_channels = []
+    
+    for channel_id, room in werewolf_rooms.items():
+        # 最後のアクティビティから30分以上経過したゲームを終了
+        if "last_activity" in room:
+            inactive_time = (current_time - room["last_activity"]).total_seconds()
+            if inactive_time > 1800:  # 30分
+                inactive_channels.append(channel_id)
+    
+    # 非アクティブなゲームを削除
+    for channel_id in inactive_channels:
+        del werewolf_rooms[channel_id]
+
+# 定期的なクリーンアップタスク
+@tasks.loop(minutes=15)
+async def cleanup_task():
+    """定期的なクリーンアップを実行"""
+    cleanup_inactive_games()
+
+# ゲーム開始時の処理を改善
+async def start_game(interaction: discord.Interaction):
+    """ゲームを開始する（エラーハンドリング付き）"""
+    try:
+        channel_id = interaction.channel_id
+        room = get_room_safely(channel_id)
+        
+        # ゲーム開始前の検証
+        if len(room["players"]) not in ROLE_PRESETS:
+            raise WerewolfGameError(f"プレイヤー数({len(room['players'])})が不正です")
+        
+        # ゲーム状態の初期化
+        room["phase"] = PHASE_NIGHT
+        room["day_count"] = 1
+        room["start_time"] = datetime.now()
+        room["last_activity"] = datetime.now()
+        
+        # 役職の割り当て
+        await assign_roles(channel_id)
+        
+        # ゲーム状態の検証
+        validate_game_state(room)
+        
+        # ゲーム開始メッセージ
+        await interaction.channel.send(
+            "🎮 **人狼ゲームを開始します**\n" +
+            get_game_status_display(room)
+        )
+        
+        # 各プレイヤーに役職を通知
+        for user_id in room["players"]:
+            user = get_player_safely(user_id)
+            role = room["role_map"][user_id]
+            
+            # 役職に応じた追加情報を付加
+            additional_info = ""
+            if role == "人狼":
+                # 他の人狼を通知
+                other_wolves = [uid for uid, r in room["role_map"].items() if r == "人狼" and uid != user_id]
+                if other_wolves:
+                    wolf_names = [get_player_safely(uid).display_name for uid in other_wolves]
+                    additional_info = f"\n\n🐺 仲間の人狼: {', '.join(wolf_names)}"
+            
+            await safe_dm(
+                user,
+                f"あなたの役職は **{role}** です。\n" +
+                ROLE_DESCRIPTIONS[role] +
+                additional_info
+            )
+        
+        # 初日夜フェーズを開始
+        await start_first_night(channel_id)
+        
+    except WerewolfGameError as e:
+        await interaction.channel.send(f"🚫 ゲーム開始エラー: {str(e)}")
+    except Exception as e:
+        await interaction.channel.send("❌ 予期せぬエラーが発生しました。")
+        print(f"ゲーム開始エラー: {e}")

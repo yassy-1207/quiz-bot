@@ -34,7 +34,7 @@ date_scores = {}        # 日付ごとの累積スコア（使っていない場
 tmp_sessions = {}       # {channel_id: True} 実行中フラグ
 tmp_participants = {}   # {channel_id: set(user_id)} 参加者IDの集合
 tmp_ready = {}          # {channel_id: bool} 開始準備フラグ
-tmp_settings = {}       # {channel_id: {"category": str, "difficulty": str, "count": int}}
+tmp_settings = {}       # {channel_id: {"difficulty": str, "count": int}}
 
 # 定数
 MAX_COUNT = 50
@@ -46,29 +46,22 @@ quiz_bot = None
 def get_today_key():
     return datetime.now().strftime("%Y-%m-%d")
 
-def get_categories():
-    cats = sorted({q.get("category", "未分類") for q in quiz_data})
-    return ["全カテゴリ"] + cats
-
 def get_difficulties():
     return ["初級", "中級", "上級"]
 
 # ======================================
 # run_quiz 関数をグローバル定義
 # ======================================
-async def run_quiz(channel: discord.TextChannel, category: str, difficulty: str, count: int):
+async def run_quiz(channel: discord.TextChannel, difficulty: str, count: int):
     cid = channel.id
     # フラグ立て
     tmp_sessions[cid] = True
 
     # 問題プールを絞り込み
-    qs = quiz_data
-    if category != "全カテゴリ":
-        qs = [q for q in qs if q.get("category") == category]
-    qs = [q for q in qs if q.get("difficulty") == difficulty]
+    qs = [q for q in quiz_data if q.get("difficulty") == difficulty]
 
     if not qs:
-        await channel.send(f"❌ 問題が見つかりません (カテゴリ='{category}', 難易度='{difficulty}')")
+        await channel.send(f"❌ 問題が見つかりません (難易度='{difficulty}')")
         tmp_sessions.pop(cid, None)
         return
 
@@ -183,88 +176,16 @@ def setup_quizking(bot: commands.Bot):
     global quiz_bot
     quiz_bot = bot
 
-    async def run_quiz(channel: discord.TextChannel, category: str, difficulty: str, count: int):
-        cid = channel.id
-        # フラグ立て
-        tmp_sessions[cid] = True
-
-        # 問題プールを絞り込み
-        qs = quiz_data
-        if category != "全カテゴリ":
-            qs = [q for q in qs if q.get("category") == category]
-        qs = [q for q in qs if q.get("difficulty") == difficulty]
-
-        if not qs:
-            await channel.send(f"❌ 問題が見つかりません (カテゴリ='{category}', 難易度='{difficulty}')")
-            tmp_sessions.pop(cid, None)
-            return
-
-        # 出題数分ランダム抽出
-        questions = random.sample(qs, k=min(count, len(qs)))
-        scores = {}
-        participants = tmp_participants.get(cid, set())
-
-        for i, q in enumerate(questions, 1):
-            # 途中中断チェック
-            if not tmp_ready.get(cid):
-                await channel.send("🛑 クイズが中断されました。")
-                tmp_sessions.pop(cid, None)
-                return
-
-            # 問題を送信
-            await channel.send(f"**第{i}問/{count}問**\n{q['question']}\n⏰ {DEFAULT_TIMEOUT}秒で回答")
-
-            def check(m):
-                return (
-                    m.channel.id == cid
-                    and m.author.id in participants
-                    and not m.author.bot
-                )
-
-            answered = False
-            try:
-                while not answered and tmp_ready.get(cid):
-                    try:
-                        msg = await quiz_bot.wait_for('message', timeout=DEFAULT_TIMEOUT, check=check)
-                        if msg.content.strip() == q['answer']:
-                            scores[msg.author.id] = scores.get(msg.author.id, 0) + 1
-                            await channel.send(f"🎉 {msg.author.mention} 正解！")
-                            answered = True
-                            # 少し待ってから次の問題へ
-                            await asyncio.sleep(2)
-                    except asyncio.TimeoutError:
-                        await channel.send(f"⏰ 時間切れ！ 正解は「{q['answer']}」でした。")
-                        # 少し待ってから次の問題へ
-                        await asyncio.sleep(2)
-                        break
-            except Exception as e:
-                print(f"Error in quiz: {e}")
-                continue
-
-        # 結果発表＆クリーンアップ
-        tmp_sessions.pop(cid, None)
-        tmp_ready.pop(cid, None)
-        tmp_participants.pop(cid, None)
-
-        if scores:
-            sorted_list = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            text = "\n".join([f"<@{uid}>: {pts}点" for uid, pts in sorted_list])
-            await channel.send(f"🏁 このセッションの結果：\n{text}")
-        else:
-            await channel.send("😢 正解者なしでした。")
-
     # スラッシュコマンド /クイズ大会
-    @bot.tree.command(name="クイズ大会", description="カテゴリ・難易度・問題数を指定してクイズを準備")
+    @bot.tree.command(name="クイズ大会", description="難易度・問題数を指定してクイズを準備")
     @discord.app_commands.describe(
-        category="出題カテゴリ",
         difficulty="難易度",
         count="問題数（最大50問）"
     )
     @discord.app_commands.choices(
-        category=[discord.app_commands.Choice(name=c, value=c) for c in get_categories()],
         difficulty=[discord.app_commands.Choice(name=d, value=d) for d in get_difficulties()]
     )
-    async def quiz(interaction: discord.Interaction, category: str, difficulty: str, count: int = 5):
+    async def quiz(interaction: discord.Interaction, difficulty: str, count: int = 5):
         cid = interaction.channel.id
 
         # 実行中チェック
@@ -278,14 +199,14 @@ def setup_quizking(bot: commands.Bot):
             )
 
         # 設定保存
-        tmp_settings[cid] = {"category": category, "difficulty": difficulty, "count": count}
+        tmp_settings[cid] = {"difficulty": difficulty, "count": count}
         tmp_participants[cid] = set()
         tmp_ready[cid] = False
 
         # 参加ボタンつきメッセージを送信
         view = QuizSetupView(cid)
         await interaction.response.send_message(
-            f"🎯 クイズ準備中: カテゴリ='{category}', 難易度='{difficulty}', 問数={count}\n"
+            f"🎯 クイズ準備中: 難易度='{difficulty}', 問数={count}\n"
             "参加する方は下をクリック。準備が整ったら'締切・開始する'でスタート。",
             view=view
         )
