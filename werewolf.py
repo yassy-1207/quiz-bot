@@ -11,6 +11,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Dict, Set, List, Optional, Union, Tuple, FrozenSet
 from functools import lru_cache
+from discord.ext import tasks
 
 # === 定数定義 ===
 VOTE_WARNING_TIME = 30  # 投票終了30秒前に警告
@@ -161,6 +162,59 @@ def setup_werewolf(bot: commands.Bot):
     """
     global werewolf_bot
     werewolf_bot = bot
+
+    # エラーハンドリング付きのコマンド実行
+    @bot.tree.error
+    async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """コマンドエラーのハンドリング"""
+        if isinstance(error, app_commands.CommandOnCooldown):
+            await interaction.response.send_message(
+                f"⏳ コマンドのクールダウン中です。{error.retry_after:.1f}秒後に再試行してください。",
+                ephemeral=True
+            )
+        elif isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message(
+                "⚠️ このコマンドを実行する権限がありません。",
+                ephemeral=True
+            )
+        elif isinstance(error, WerewolfGameError):
+            await interaction.response.send_message(
+                f"🚫 ゲームエラー: {str(error)}",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ 予期せぬエラーが発生しました。しばらく待ってから再試行してください。",
+                ephemeral=True
+            )
+            # エラーログ出力
+            print(f"コマンドエラー: {error}")
+
+    # パフォーマンス最適化
+    def cleanup_inactive_games():
+        """非アクティブなゲームをクリーンアップ"""
+        current_time = datetime.now()
+        inactive_channels = []
+        
+        for channel_id, room in werewolf_rooms.items():
+            # 最後のアクティビティから30分以上経過したゲームを終了
+            if "last_activity" in room:
+                inactive_time = (current_time - room["last_activity"]).total_seconds()
+                if inactive_time > 1800:  # 30分
+                    inactive_channels.append(channel_id)
+        
+        # 非アクティブなゲームを削除
+        for channel_id in inactive_channels:
+            del werewolf_rooms[channel_id]
+
+    # 定期的なクリーンアップタスク
+    @tasks.loop(minutes=15)
+    async def cleanup_task():
+        """定期的なクリーンアップを実行"""
+        cleanup_inactive_games()
+
+    # クリーンアップタスクを開始
+    cleanup_task.start()
 
     # === コマンド定義 ===
     @bot.tree.command(name="じんろう", description="人狼ゲームを始めます")
@@ -1507,50 +1561,6 @@ def validate_game_state(room: dict) -> None:
     accounted_players = set(room["alive"]) | set(room["dead"])
     if all_players != accounted_players:
         raise WerewolfGameError("プレイヤーの状態が不正です")
-
-# エラーハンドリング付きのコマンド実行
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    """コマンドエラーのハンドリング"""
-    if isinstance(error, app_commands.CommandOnCooldown):
-        await interaction.response.send_message(
-            f"⏳ コマンドのクールダウン中です。{error.retry_after:.1f}秒後に再試行してください。",
-            ephemeral=True
-        )
-    elif isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message(
-            "⚠️ このコマンドを実行する権限がありません。",
-            ephemeral=True
-        )
-    elif isinstance(error, WerewolfGameError):
-        await interaction.response.send_message(
-            f"🚫 ゲームエラー: {str(error)}",
-            ephemeral=True
-        )
-    else:
-        await interaction.response.send_message(
-            "❌ 予期せぬエラーが発生しました。しばらく待ってから再試行してください。",
-            ephemeral=True
-        )
-        # エラーログ出力
-        print(f"コマンドエラー: {error}")
-
-# パフォーマンス最適化
-def cleanup_inactive_games():
-    """非アクティブなゲームをクリーンアップ"""
-    current_time = datetime.now()
-    inactive_channels = []
-    
-    for channel_id, room in werewolf_rooms.items():
-        # 最後のアクティビティから30分以上経過したゲームを終了
-        if "last_activity" in room:
-            inactive_time = (current_time - room["last_activity"]).total_seconds()
-            if inactive_time > 1800:  # 30分
-                inactive_channels.append(channel_id)
-    
-    # 非アクティブなゲームを削除
-    for channel_id in inactive_channels:
-        del werewolf_rooms[channel_id]
 
 # 定期的なクリーンアップタスク
 @tasks.loop(minutes=15)
