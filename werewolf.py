@@ -213,8 +213,13 @@ def setup_werewolf(bot: commands.Bot):
         """定期的なクリーンアップを実行"""
         cleanup_inactive_games()
 
-    # クリーンアップタスクを開始
-    cleanup_task.start()
+    # === イベントリスナー定義 ===
+    @bot.event
+    async def on_ready():
+        await bot.tree.sync()
+        print(f"{bot.user} 起動完了")
+        # クリーンアップタスクを開始
+        cleanup_task.start()
 
     # === コマンド定義 ===
     @bot.tree.command(name="じんろう", description="人狼ゲームを始めます")
@@ -356,12 +361,6 @@ def setup_werewolf(bot: commands.Bot):
             f"🏆 {user.mention} の人狼ゲーム戦績\n\n{stats.get_stats_display()}",
             ephemeral=True
         )
-
-    # === イベントリスナー定義 ===
-    @bot.event
-    async def on_ready():
-        await bot.tree.sync()
-        print(f"{bot.user} 起動完了")
 
     # 既存のコードをsetup_werewolf関数内に移動
     return bot
